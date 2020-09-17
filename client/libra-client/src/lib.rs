@@ -6,7 +6,7 @@ use libra_crypto::{
 use libra_types::account_address::AccountAddress;
 use serde::{Deserialize, Serialize};
 
-pub mod libra_client;
+pub mod client;
 
 /// Struct used to store data for each created account.  We track the sequence number
 /// so we can create new transactions easily

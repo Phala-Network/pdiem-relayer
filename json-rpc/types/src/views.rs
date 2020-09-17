@@ -26,7 +26,7 @@ use move_core_types::{
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, convert::TryFrom};
-// use transaction_builder::get_transaction_name;
+use transaction_builder::get_transaction_name;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AmountView {
@@ -596,67 +596,67 @@ impl From<AccountRole> for AccountRoleView {
     }
 }
 
-// impl From<TransactionPayload> for ScriptView {
-//     fn from(value: TransactionPayload) -> Self {
-//         let empty_vec: Vec<TransactionArgument> = vec![];
-//         let empty_ty_vec: Vec<String> = vec![];
-//         let unknown_currency = "unknown_currency".to_string();
-//
-//         let (code, args, ty_args) = match value {
-//             TransactionPayload::WriteSet(_) => ("genesis".to_string(), empty_vec, empty_ty_vec),
-//             TransactionPayload::Script(script) => (
-//                 get_transaction_name(script.code()),
-//                 script.args().to_vec(),
-//                 script
-//                     .ty_args()
-//                     .iter()
-//                     .map(|type_tag| match type_tag {
-//                         TypeTag::Struct(StructTag { module, .. }) => module.to_string(),
-//                         tag => format!("{}", tag),
-//                     })
-//                     .collect(),
-//             ),
-//             TransactionPayload::Module(_) => {
-//                 ("module publishing".to_string(), empty_vec, empty_ty_vec)
-//             }
-//         };
-//
-//         let res = match code.as_str() {
-//             "peer_to_peer_with_metadata_transaction" => {
-//                 if let [TransactionArgument::Address(receiver), TransactionArgument::U64(amount), TransactionArgument::U8Vector(metadata), TransactionArgument::U8Vector(metadata_signature)] =
-//                     &args[..]
-//                 {
-//                     Ok(ScriptView::PeerToPeer {
-//                         receiver: receiver.to_string(),
-//                         amount: *amount,
-//                         currency: ty_args.get(0).unwrap_or(&unknown_currency).to_string(),
-//                         metadata: BytesView::from(metadata),
-//                         metadata_signature: BytesView::from(metadata_signature),
-//                     })
-//                 } else {
-//                     Err(format_err!("Unable to parse PeerToPeer arguments"))
-//                 }
-//             }
-//             "mint" => {
-//                 if let [TransactionArgument::Address(receiver), TransactionArgument::U8Vector(auth_key_prefix), TransactionArgument::U64(amount)] =
-//                     &args[..]
-//                 {
-//                     let currency = ty_args.get(0).unwrap_or(&unknown_currency).to_string();
-//                     Ok(ScriptView::Mint {
-//                         receiver: receiver.to_string(),
-//                         auth_key_prefix: BytesView::from(auth_key_prefix),
-//                         amount: *amount,
-//                         currency,
-//                     })
-//                 } else {
-//                     Err(format_err!("Unable to parse PeerToPeer arguments"))
-//                 }
-//             }
-//             _ => Err(format_err!("Unknown scripts")),
-//         };
-//         res.unwrap_or(ScriptView::Unknown {})
-//     }
-// }
+impl From<TransactionPayload> for ScriptView {
+    fn from(value: TransactionPayload) -> Self {
+        let empty_vec: Vec<TransactionArgument> = vec![];
+        let empty_ty_vec: Vec<String> = vec![];
+        let unknown_currency = "unknown_currency".to_string();
+
+        let (code, args, ty_args) = match value {
+            TransactionPayload::WriteSet(_) => ("genesis".to_string(), empty_vec, empty_ty_vec),
+            TransactionPayload::Script(script) => (
+                get_transaction_name(script.code()),
+                script.args().to_vec(),
+                script
+                    .ty_args()
+                    .iter()
+                    .map(|type_tag| match type_tag {
+                        TypeTag::Struct(StructTag { module, .. }) => module.to_string(),
+                        tag => format!("{}", tag),
+                    })
+                    .collect(),
+            ),
+            TransactionPayload::Module(_) => {
+                ("module publishing".to_string(), empty_vec, empty_ty_vec)
+            }
+        };
+
+        let res = match code.as_str() {
+            "peer_to_peer_with_metadata_transaction" => {
+                if let [TransactionArgument::Address(receiver), TransactionArgument::U64(amount), TransactionArgument::U8Vector(metadata), TransactionArgument::U8Vector(metadata_signature)] =
+                    &args[..]
+                {
+                    Ok(ScriptView::PeerToPeer {
+                        receiver: receiver.to_string(),
+                        amount: *amount,
+                        currency: ty_args.get(0).unwrap_or(&unknown_currency).to_string(),
+                        metadata: BytesView::from(metadata),
+                        metadata_signature: BytesView::from(metadata_signature),
+                    })
+                } else {
+                    Err(format_err!("Unable to parse PeerToPeer arguments"))
+                }
+            }
+            "mint" => {
+                if let [TransactionArgument::Address(receiver), TransactionArgument::U8Vector(auth_key_prefix), TransactionArgument::U64(amount)] =
+                    &args[..]
+                {
+                    let currency = ty_args.get(0).unwrap_or(&unknown_currency).to_string();
+                    Ok(ScriptView::Mint {
+                        receiver: receiver.to_string(),
+                        auth_key_prefix: BytesView::from(auth_key_prefix),
+                        amount: *amount,
+                        currency,
+                    })
+                } else {
+                    Err(format_err!("Unable to parse PeerToPeer arguments"))
+                }
+            }
+            _ => Err(format_err!("Unknown scripts")),
+        };
+        res.unwrap_or(ScriptView::Unknown {})
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CurrencyInfoView {
