@@ -1,0 +1,16 @@
+[package]
+name = "libra-client"
+version = "0.1.0"
+authors = ["liwei <luswar@163.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.32"
+reqwest = { version = "0.10.8", features = ["blocking", "json", "rustls-tls"], default-features = false }
+
+libra-crypto = { path = "../crypto/crypto", version = "0.1.0" }
+libra-json-rpc-client = { path = "../json-rpc/client", version = "0.1.0" }
+libra-logger =  { path = "../common/logger", version = "0.1.0" }
+libra-types = { path = "../types", version = "0.1.0", features = ["fuzzing"] }

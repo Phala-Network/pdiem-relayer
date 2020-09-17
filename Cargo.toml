@@ -13,7 +13,9 @@ serde = { version = "1.0.114", default-features = false }
 serde_json = "1.0.57"
 tokio = { version = "0.2", features = ["macros"] }
 
-json-rpc = { path = "./json-rpc", version = "0.1.0" }
+libra-json-rpc-client = { path = "./json-rpc/client", version = "0.1.0" }
+libra-json-rpc-types  = { path = "./json-rpc/types" }
 #verify = { path = "./verify", version = "0.1.0"}
 lcs = { path = "./common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
 libra-types = {path = "./types", version = "0.1.0" }
+libra-client = {path = "./client", version = "0.1.0"}
