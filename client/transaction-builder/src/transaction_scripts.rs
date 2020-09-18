@@ -234,62 +234,62 @@ impl fmt::Display for StdlibScript {
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    // This includes the compiled script binaries.
-    const COMPILED_TXN_SCRIPTS_DIR: Dir = include_dir!("transaction_scripts");
-
-    #[test]
-    fn test_file_correspondence() {
-        // Make sure that every compiled file under transaction_scripts is represented in
-        // StdlibScript::all() (and vice versa).
-        let files = COMPILED_TXN_SCRIPTS_DIR.files();
-        let scripts = StdlibScript::all();
-        for file in files {
-            assert!(
-                StdlibScript::is(file.contents()),
-                "File {} missing from StdlibScript enum",
-                file.path().display()
-            )
-        }
-        assert_eq!(
-            files.len(),
-            scripts.len(),
-            "Mismatch between stdlib script files and StdlibScript enum. {}",
-            if files.len() > scripts.len() {
-                "Did you forget to extend the StdlibScript enum?"
-            } else {
-                "Did you forget to rebuild the standard library?"
-            }
-        );
-    }
-
-    #[test]
-    fn test_names() {
-        // Make sure that the names listed here matches the function names in the code.
-        for script in StdlibScript::all() {
-            assert_eq!(
-                script.name(),
-                script.abi().name(),
-                "The main function in language/stdlib/transaction_scripts/{}.move is named `{}` instead of `{}`. Please fix the issue and re-run (cd language/stdlib && cargo run --release)",
-                script.name(),
-                script.abi().name(),
-                script.name(),
-            );
-        }
-    }
-
-    #[test]
-    fn test_docs() {
-        // Make sure that scripts have non-empty documentation.
-        for script in StdlibScript::all() {
-            assert!(
-                !script.abi().doc().is_empty(),
-                "The main function in language/stdlib/transaction_scripts/{}.move does not have a `///` inline doc comment. Please fix the issue and re-run (cd language/stdlib && cargo run --release)",
-                script.name(),
-            );
-        }
-    }
-}
+// #[cfg(test)]
+// mod test {
+//     use super::*;
+//
+//     // This includes the compiled script binaries.
+//     const COMPILED_TXN_SCRIPTS_DIR: Dir = include_dir!("transaction_scripts");
+//
+//     #[test]
+//     fn test_file_correspondence() {
+//         // Make sure that every compiled file under transaction_scripts is represented in
+//         // StdlibScript::all() (and vice versa).
+//         let files = COMPILED_TXN_SCRIPTS_DIR.files();
+//         let scripts = StdlibScript::all();
+//         for file in files {
+//             assert!(
+//                 StdlibScript::is(file.contents()),
+//                 "File {} missing from StdlibScript enum",
+//                 file.path().display()
+//             )
+//         }
+//         assert_eq!(
+//             files.len(),
+//             scripts.len(),
+//             "Mismatch between stdlib script files and StdlibScript enum. {}",
+//             if files.len() > scripts.len() {
+//                 "Did you forget to extend the StdlibScript enum?"
+//             } else {
+//                 "Did you forget to rebuild the standard library?"
+//             }
+//         );
+//     }
+//
+//     #[test]
+//     fn test_names() {
+//         // Make sure that the names listed here matches the function names in the code.
+//         for script in StdlibScript::all() {
+//             assert_eq!(
+//                 script.name(),
+//                 script.abi().name(),
+//                 "The main function in language/stdlib/transaction_scripts/{}.move is named `{}` instead of `{}`. Please fix the issue and re-run (cd language/stdlib && cargo run --release)",
+//                 script.name(),
+//                 script.abi().name(),
+//                 script.name(),
+//             );
+//         }
+//     }
+//
+//     #[test]
+//     fn test_docs() {
+//         // Make sure that scripts have non-empty documentation.
+//         for script in StdlibScript::all() {
+//             assert!(
+//                 !script.abi().doc().is_empty(),
+//                 "The main function in language/stdlib/transaction_scripts/{}.move does not have a `///` inline doc comment. Please fix the issue and re-run (cd language/stdlib && cargo run --release)",
+//                 script.name(),
+//             );
+//         }
+//     }
+// }
