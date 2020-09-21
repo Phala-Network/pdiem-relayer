@@ -19,3 +19,4 @@ libra-json-rpc-types  = { path = "./json-rpc/types" }
 lcs = { path = "./common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
 libra-types = {path = "./types", version = "0.1.0" }
 libra-client = {path = "client/libra-client", version = "0.1.0"}
+swiss-knife = {path = "client/swiss-knife", version = "0.1.0"}

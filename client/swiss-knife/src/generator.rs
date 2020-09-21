@@ -18,7 +18,7 @@ use rand::{prelude::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use structopt::StructOpt;
-use swiss_knife::helpers;
+use crate::helpers;
 
 #[derive(Debug, StructOpt)]
 enum Command {
