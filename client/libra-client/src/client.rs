@@ -361,3 +361,74 @@ impl LibraClient {
         }
     }
 }
+
+
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use libra_types::{
+        transaction::TransactionInfo,
+        proof::{
+            TransactionAccumulatorProof,
+            SparseMerkleProof,
+            AccumulatorConsistencyProof,
+        }
+    };
+    use libra_crypto::{
+        hash::{
+            CryptoHash, CryptoHasher, EventAccumulatorHasher, SparseMerkleInternalHasher,
+            TestOnlyHasher, TransactionAccumulatorHasher,
+        },
+        HashValue,
+    };
+    #[test]
+    fn test_get_state_proof() {
+        let mut batch = JsonRpcBatch::new();
+        batch.add_get_state_proof_request(0);
+        let url = Url::parse("http://client.testnet.libra.org/v1").unwrap();
+        let mut client = JsonRpcClient::new(url).unwrap();
+        let responses = client.execute(batch).unwrap();
+
+        let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
+
+        let state_proof = StateProofView::from_response(resp.clone()).unwrap();
+        let epoch_change_proof: EpochChangeProof =
+            lcs::from_bytes(&state_proof.epoch_change_proof.into_bytes().unwrap()).unwrap();
+        let ledger_info_with_signatures: LedgerInfoWithSignatures =
+            lcs::from_bytes(&state_proof.ledger_info_with_signatures.into_bytes().unwrap()).unwrap();
+
+        let ledger_consistency_proof: AccumulatorConsistencyProof =
+            lcs::from_bytes(&state_proof.ledger_consistency_proof.into_bytes().unwrap()).unwrap();
+        // println!("{:#?}", epoch_change_proof);
+        // println!("{:#?}", ledger_consistency_proof);
+        // println!("{:#?}", ledger_info_with_signatures);
+    }
+
+    #[test]
+    fn test_get_account_state_with_proof() {
+        let mut batch = JsonRpcBatch::new();
+        let mut account = AccountAddress::from_hex_literal("0x1668f6be25668c1a17cd8caf6b8d2f25").unwrap();
+        batch.add_get_account_state_with_proof_request(account,     Some(207793), Some(576400));
+        let url = Url::parse("http://client.testnet.libra.org/v1").unwrap();
+        let mut client = JsonRpcClient::new(url).unwrap();
+        let responses = client.execute(batch).unwrap();
+        let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
+        let account_state_proof =
+            AccountStateWithProofView::from_response(resp.clone()).unwrap();
+
+        let ledger_info_to_transaction_info_proof: TransactionAccumulatorProof=
+            lcs::from_bytes(&account_state_proof.proof.ledger_info_to_transaction_info_proof.into_bytes().unwrap()).unwrap();
+        let transaction_info: TransactionInfo=
+            lcs::from_bytes(&account_state_proof.proof.transaction_info.into_bytes().unwrap()).unwrap();
+        let transaction_info_to_account_proof: SparseMerkleProof=
+            lcs::from_bytes(&account_state_proof.proof.transaction_info_to_account_proof.into_bytes().unwrap()).unwrap();
+
+
+        // println!("{:#?}", blob);
+        println!("{:#?}", ledger_info_to_transaction_info_proof);
+        println!("{:#?}", transaction_info);
+        println!("{:#?}", transaction_info_to_account_proof);
+
+    }
+}

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod blocking;
-pub mod client;
+mod client;
 mod response;
 
 pub use blocking::JsonRpcClient;

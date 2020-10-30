@@ -17,9 +17,9 @@ serde = { version = "1.0.116", default-features = false }
 serde_json = "1.0.57"
 
 lcs = { path = "../../common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
-libra-json-rpc-types  = { path = "../types" }
+libra-json-rpc-types  = { path = "../../json-rpc/types" }
 libra-types = { path = "../../types", version = "0.1.0" }
 
 [features]
 default = ["tls"]
-tls = ["reqwest/rustls-tls"]
+tls = ["reqwest/native-tls"]

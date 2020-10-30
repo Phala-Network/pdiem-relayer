@@ -14,7 +14,7 @@ use move_core_types::{
     move_resource::MoveResource,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt, sync::Arc};
 
 mod libra_version;
 mod registered_currencies;
@@ -45,6 +45,16 @@ impl ConfigID {
         access_path_for_config(
             AccountAddress::from_hex_literal(self.0).expect("failed to get address"),
             Identifier::new(self.1).expect("failed to get Identifier"),
+        )
+    }
+}
+
+impl fmt::Display for ConfigID {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "OnChain config ID [address: {}, identifier: {}]",
+            self.0, self.1
         )
     }
 }
@@ -83,6 +93,20 @@ impl OnChainConfigPayload {
 
     pub fn configs(&self) -> &HashMap<ConfigID, Vec<u8>> {
         &self.configs
+    }
+}
+
+impl fmt::Display for OnChainConfigPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut config_ids = "".to_string();
+        for id in self.configs.keys() {
+            config_ids += &id.to_string();
+        }
+        write!(
+            f,
+            "OnChainConfigPayload [epoch: {}, configs: {}]",
+            self.epoch, config_ids
+        )
     }
 }
 
@@ -130,7 +154,7 @@ pub trait OnChainConfig: Send + Sync + DeserializeOwned {
 }
 
 pub fn new_epoch_event_key() -> EventKey {
-    EventKey::new_from_address(&config_address(), 0)
+    EventKey::new_from_address(&config_address(), 4)
 }
 
 pub fn access_path_for_config(address: AccountAddress, config_name: Identifier) -> AccessPath {

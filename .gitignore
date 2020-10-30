@@ -6,3 +6,5 @@
 /crypto/crypto-derive/target
 /client/transaction-builder/target
 /client/swiss-knife/target
+/client/libra-client/target
+/language/tools/move-explain/target

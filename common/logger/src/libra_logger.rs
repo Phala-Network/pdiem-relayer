@@ -3,8 +3,8 @@
 
 use crate::{
     counters::{
-        PROCESSED_STRUCT_LOG_COUNT, SENT_STRUCT_LOG_COUNT, STRUCT_LOG_PARSE_ERROR_COUNT,
-        STRUCT_LOG_QUEUE_ERROR_COUNT, STRUCT_LOG_SEND_ERROR_COUNT,
+        PROCESSED_STRUCT_LOG_COUNT, SENT_STRUCT_LOG_BYTES, SENT_STRUCT_LOG_COUNT,
+        STRUCT_LOG_PARSE_ERROR_COUNT, STRUCT_LOG_QUEUE_ERROR_COUNT, STRUCT_LOG_SEND_ERROR_COUNT,
     },
     logger::Logger,
     struct_log::TcpWriter,
@@ -13,7 +13,7 @@ use crate::{
 use chrono::{SecondsFormat, Utc};
 use serde::Serialize;
 use std::{
-    collections::HashMap,
+    collections::BTreeMap,
     env, fmt,
     io::Write,
     sync::{
@@ -31,25 +31,33 @@ const NUM_SEND_RETRIES: u8 = 1;
 pub struct LogEntry {
     #[serde(flatten)]
     metadata: Metadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread_name: Option<String>,
     timestamp: String,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
-    data: HashMap<&'static str, serde_json::Value>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    data: BTreeMap<&'static str, serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
 }
 
 impl LogEntry {
-    fn new(event: &Event) -> Self {
+    fn new(event: &Event, thread_name: Option<&str>) -> Self {
         use crate::{Key, Value, Visitor};
 
-        struct JsonVisitor<'a>(&'a mut HashMap<&'static str, serde_json::Value>);
+        struct JsonVisitor<'a>(&'a mut BTreeMap<&'static str, serde_json::Value>);
 
         impl<'a> Visitor for JsonVisitor<'a> {
             fn visit_pair(&mut self, key: Key, value: Value<'_>) {
                 let v = match value {
                     Value::Debug(d) => serde_json::Value::String(format!("{:?}", d)),
                     Value::Display(d) => serde_json::Value::String(d.to_string()),
-                    Value::Serde(s) => serde_json::to_value(s).unwrap(),
+                    Value::Serde(s) => match serde_json::to_value(s) {
+                        Ok(value) => value,
+                        Err(e) => {
+                            eprintln!("error serializing structured log: {}", e);
+                            return;
+                        }
+                    },
                 };
 
                 self.0.insert(key.as_str(), v);
@@ -57,15 +65,17 @@ impl LogEntry {
         }
 
         let metadata = *event.metadata();
+        let thread_name = thread_name.map(ToOwned::to_owned);
         let message = event.message().map(fmt::format);
 
-        let mut data = HashMap::new();
+        let mut data = BTreeMap::new();
         for schema in event.keys_and_values() {
             schema.visit(&mut JsonVisitor(&mut data));
         }
 
         Self {
             metadata,
+            thread_name,
             timestamp: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
             data,
             message,
@@ -222,7 +232,7 @@ impl Logger for LibraLogger {
     }
 
     fn record(&self, event: &Event) {
-        let entry = LogEntry::new(event);
+        let entry = LogEntry::new(event, ::std::thread::current().name());
 
         self.send_entry(entry)
     }
@@ -241,20 +251,26 @@ impl LoggerService {
         for entry in self.receiver {
             PROCESSED_STRUCT_LOG_COUNT.inc();
 
-            if let Some(writer) = &mut writer {
-                Self::write_to_logstash(writer, &entry);
-            }
-
             if let Some(printer) = &self.printer {
                 let s = format(&entry).expect("Unable to format");
                 printer.write(s)
+            }
+
+            if let Some(writer) = &mut writer {
+                Self::write_to_logstash(writer, entry);
             }
         }
     }
 
     /// Writes a log line into json_lines logstash format, which has a newline at the end
-    fn write_to_logstash(stream: &mut TcpWriter, entry: &LogEntry) {
-        let message = if let Ok(json) = serde_json::to_string(entry) {
+    fn write_to_logstash(stream: &mut TcpWriter, mut entry: LogEntry) {
+        // XXX Temporary hack to ensure that log lines don't show up empty in kibana when the
+        // "message" field isn't set.
+        if entry.message.is_none() {
+            entry.message = Some(serde_json::to_string(&entry.data).unwrap());
+        }
+
+        let message = if let Ok(json) = serde_json::to_string(&entry) {
             json
         } else {
             STRUCT_LOG_PARSE_ERROR_COUNT.inc();
@@ -263,6 +279,7 @@ impl LoggerService {
 
         let message = message + "\n";
         let bytes = message.as_bytes();
+        let message_length = bytes.len();
 
         // Attempt to write the log up to NUM_SEND_RETRIES + 1, and then drop it
         // Each `write_all` call will attempt to open a connection if one isn't open
@@ -283,7 +300,8 @@ impl LoggerService {
                 e
             );
         } else {
-            SENT_STRUCT_LOG_COUNT.inc()
+            SENT_STRUCT_LOG_COUNT.inc();
+            SENT_STRUCT_LOG_BYTES.inc_by(message_length as i64);
         }
     }
 }
@@ -304,19 +322,51 @@ impl Writer for StderrWriter {
     }
 }
 
+/// A struct for writing logs to a file
+pub struct FileWriter {
+    log_file: std::sync::RwLock<std::fs::File>,
+}
+
+impl FileWriter {
+    pub fn new(log_file: std::path::PathBuf) -> Self {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(log_file)
+            .expect("Unable to open log file");
+        Self {
+            log_file: std::sync::RwLock::new(file),
+        }
+    }
+}
+
+impl Writer for FileWriter {
+    /// Write to file
+    fn write(&self, log: String) {
+        if let Err(err) = writeln!(self.log_file.write().unwrap(), "{}", log) {
+            eprintln!("Unable to write to log file: {}", err.to_string());
+        }
+    }
+}
+
 /// Converts a record into a string representation:
-/// UNIX_TIMESTAMP LOG_LEVEL FILE:LINE MESSAGE
+/// UNIX_TIMESTAMP LOG_LEVEL [thread_name] FILE:LINE MESSAGE JSON_DATA
 /// Example:
-/// 2020-03-07 05:03:03 INFO common/libra-logger/src/lib.rs:261 Hello
+/// 2020-03-07 05:03:03 INFO [thread_name] common/libra-logger/src/lib.rs:261 Hello { "world": true }
 fn format(entry: &LogEntry) -> Result<String, fmt::Error> {
     use std::fmt::Write;
 
     let mut w = String::new();
+    write!(w, "{}", entry.timestamp)?;
+
+    if let Some(thread_name) = &entry.thread_name {
+        write!(w, " [{}]", thread_name)?;
+    }
+
     write!(
         w,
-        "{} {} {}",
+        " {} {}",
         entry.metadata.level(),
-        entry.timestamp,
         entry.metadata.location()
     )?;
 
@@ -340,9 +390,12 @@ mod tests {
     };
     use chrono::{DateTime, Utc};
     use serde_json::Value as JsonValue;
-    use std::sync::{
-        mpsc::{self, Receiver, SyncSender},
-        Arc,
+    use std::{
+        sync::{
+            mpsc::{self, Receiver, SyncSender},
+            Arc,
+        },
+        thread,
     };
 
     #[derive(serde::Serialize)]
@@ -378,7 +431,8 @@ mod tests {
         }
 
         fn record(&self, event: &Event) {
-            self.0.send(LogEntry::new(event)).unwrap();
+            let entry = LogEntry::new(event, ::std::thread::current().name());
+            self.0.send(entry).unwrap();
         }
     }
 
@@ -458,6 +512,46 @@ mod tests {
         for level in levels {
             let entry = receiver.recv().unwrap();
             assert_eq!(entry.metadata.level(), *level);
+        }
+
+        // Verify that the thread name is properly included
+        let handler = thread::Builder::new()
+            .name("named thread".into())
+            .spawn(|| info!("thread"))
+            .unwrap();
+
+        handler.join().unwrap();
+        let entry = receiver.recv().unwrap();
+        assert_eq!(entry.thread_name.as_deref(), Some("named thread"));
+
+        // Test Debug and Display inputs
+        let debug_struct = DebugStruct {};
+        let display_struct = DisplayStruct {};
+
+        error!(identifier = ?debug_struct, "Debug test");
+        error!(identifier = ?debug_struct, other = "value", "Debug2 test");
+        error!(identifier = %display_struct, "Display test");
+        error!(identifier = %display_struct, other = "value", "Display2 test");
+        error!("Literal" = ?debug_struct, "Debug test");
+        error!("Literal" = ?debug_struct, other = "value", "Debug test");
+        error!("Literal" = %display_struct, "Display test");
+        error!("Literal" = %display_struct, other = "value", "Display2 test");
+        error!("Literal" = %display_struct, other = "value", identifier = ?debug_struct, "Mixed test");
+    }
+
+    struct DebugStruct {}
+
+    impl std::fmt::Debug for DebugStruct {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "DebugStruct!")
+        }
+    }
+
+    struct DisplayStruct {}
+
+    impl std::fmt::Display for DisplayStruct {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "DisplayStruct!")
         }
     }
 }
