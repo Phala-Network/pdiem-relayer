@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
@@ -31,7 +31,7 @@ pub struct SentPaymentEvent {
 }
 
 impl SentPaymentEvent {
-    // TODO: should only be used for libra client testing and be removed eventually
+    // TODO: should only be used for diem client testing and be removed eventually
     pub fn new(
         amount: u64,
         currency_code: Identifier,
@@ -47,7 +47,7 @@ impl SentPaymentEvent {
     }
 
     pub fn try_from_bytes(bytes: &[u8]) -> Result<Self> {
-        lcs::from_bytes(bytes).map_err(Into::into)
+        bcs::from_bytes(bytes).map_err(Into::into)
     }
 
     /// Get the sender of this transaction event.

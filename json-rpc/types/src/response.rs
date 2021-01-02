@@ -27,7 +27,7 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     pub fn new(
-        chain_id: libra_types::chain_id::ChainId,
+        chain_id: diem_types::chain_id::ChainId,
         libra_ledger_version: u64,
         libra_ledger_timestampusec: u64,
     ) -> Self {
@@ -43,7 +43,7 @@ impl JsonRpcResponse {
     }
 
     pub fn new_error(
-        chain_id: libra_types::chain_id::ChainId,
+        chain_id: diem_types::chain_id::ChainId,
         libra_ledger_version: u64,
         libra_ledger_timestampusec: u64,
         error: JsonRpcError,

@@ -5,8 +5,8 @@ use crate::{
     account_address::AccountAddress,
     identifier::{IdentStr, Identifier},
 };
-use libra_crypto::hash::CryptoHash;
-use libra_crypto_derive::{CryptoHasher, LCSCryptoHash};
+use diem_crypto::hash::CryptoHash;
+use diem_crypto_derive::{CryptoHasher, BCSCryptoHash};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,7 @@ pub enum TypeTag {
     PartialOrd,
     Ord,
     CryptoHasher,
-    LCSCryptoHash,
+    BCSCryptoHash,
 )]
 pub struct StructTag {
     pub address: AccountAddress,
@@ -70,8 +70,8 @@ impl StructTag {
 /// the struct tag
 #[derive(Serialize, Deserialize, Debug, PartialEq, Hash, Eq, Clone, PartialOrd, Ord)]
 pub struct ResourceKey {
-    address: AccountAddress,
-    type_: StructTag,
+    pub address: AccountAddress,
+    pub type_: StructTag,
 }
 
 impl ResourceKey {
@@ -103,7 +103,7 @@ impl ResourceKey {
     PartialOrd,
     Ord,
     CryptoHasher,
-    LCSCryptoHash,
+    BCSCryptoHash,
 )]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 #[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]

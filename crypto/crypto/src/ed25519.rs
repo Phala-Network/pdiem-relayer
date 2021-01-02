@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //! This module provides an API for the PureEdDSA signature scheme over the ed25519 twisted
@@ -9,15 +9,15 @@
 //! # Examples
 //!
 //! ```
-//! use libra_crypto_derive::{CryptoHasher, LCSCryptoHash};
-//! use libra_crypto::{
+//! use diem_crypto_derive::{CryptoHasher, BCSCryptoHash};
+//! use diem_crypto::{
 //!     ed25519::*,
 //!     traits::{Signature, SigningKey, Uniform},
 //! };
 //! use rand::{rngs::StdRng, SeedableRng};
 //! use serde::{Serialize, Deserialize};
 //!
-//! #[derive(Serialize, Deserialize, CryptoHasher, LCSCryptoHash)]
+//! #[derive(Serialize, Deserialize, CryptoHasher, BCSCryptoHash)]
 //! pub struct TestCryptoDocTest(String);
 //! let message = TestCryptoDocTest("Test message".to_string());
 //!
@@ -29,9 +29,9 @@
 //! ```
 //! **Note**: The above example generates a private key using a private function intended only for
 //! testing purposes. Production code should find an alternate means for secure key generation.
-#[cfg(feature = "vanilla")]
+#[cfg(any(feature = "vanilla-u64", feature = "vanilla-u32"))]
 use vanilla_curve25519_dalek as curve25519_dalek;
-#[cfg(feature = "vanilla")]
+#[cfg(any(feature = "vanilla-u64", feature = "vanilla-u32"))]
 use vanilla_ed25519_dalek as ed25519_dalek;
 
 use crate::{
@@ -40,7 +40,7 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use core::convert::TryFrom;
-use libra_crypto_derive::{DeserializeKey, SerializeKey, SilentDebug, SilentDisplay};
+use diem_crypto_derive::{DeserializeKey, SerializeKey, SilentDebug, SilentDisplay};
 use mirai_annotations::*;
 use serde::Serialize;
 use std::{cmp::Ordering, fmt};
@@ -237,7 +237,7 @@ impl SigningKey for Ed25519PrivateKey {
 
     fn sign<T: CryptoHash + Serialize>(&self, message: &T) -> Ed25519Signature {
         let mut bytes = <T::Hasher as CryptoHasher>::seed().to_vec();
-        lcs::serialize_into(&mut bytes, &message)
+        bcs::serialize_into(&mut bytes, &message)
             .map_err(|_| CryptoMaterialError::SerializationError)
             .expect("Serialization of signable material should not fail.");
         Ed25519PrivateKey::sign_arbitrary_message(&self, bytes.as_ref())
@@ -421,7 +421,7 @@ impl Signature for Ed25519Signature {
         // Public keys should be validated to be safe against small subgroup attacks, etc.
         precondition!(has_tag!(public_key, ValidatedPublicKeyTag));
         let mut bytes = <T::Hasher as CryptoHasher>::seed().to_vec();
-        lcs::serialize_into(&mut bytes, &message)
+        bcs::serialize_into(&mut bytes, &message)
             .map_err(|_| CryptoMaterialError::SerializationError)?;
         Self::verify_arbitrary_msg(self, &bytes, public_key)
     }
@@ -448,7 +448,7 @@ impl Signature for Ed25519Signature {
     /// Batch signature verification as described in the original EdDSA article
     /// by Bernstein et al. "High-speed high-security signatures". Current implementation works for
     /// signatures on the same message and it checks for malleability.
-    #[cfg(all(feature = "batch", not(feature = "vanilla")))] // see https://github.com/dalek-cryptography/ed25519-dalek/issues/126
+    #[cfg(feature = "batch")]
     fn batch_verify<T: CryptoHash + Serialize>(
         message: &T,
         keys_and_signatures: Vec<(Self::VerifyingKeyMaterial, Self)>,
@@ -457,7 +457,7 @@ impl Signature for Ed25519Signature {
             Ed25519Signature::check_malleability(&sig.to_bytes())?
         }
         let mut message_bytes = <T::Hasher as CryptoHasher>::seed().to_vec();
-        lcs::serialize_into(&mut message_bytes, &message)
+        bcs::serialize_into(&mut message_bytes, &message)
             .map_err(|_| CryptoMaterialError::SerializationError)?;
 
         let batch_argument = keys_and_signatures

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use libra_types::{
+use diem_types::{
     mempool_status::{MempoolStatus, MempoolStatusCode},
     vm_status::{StatusCode, StatusType},
 };

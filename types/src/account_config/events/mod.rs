@@ -1,6 +1,7 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod admin_transaction;
 pub mod base_url_rotation;
 pub mod burn;
 pub mod cancel_burn;
@@ -16,6 +17,7 @@ pub mod received_payment;
 pub mod sent_payment;
 pub mod upgrade;
 
+pub use admin_transaction::*;
 pub use base_url_rotation::*;
 pub use burn::*;
 pub use cancel_burn::*;

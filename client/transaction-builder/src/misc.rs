@@ -5,7 +5,7 @@
 
 //use compiled_stdlib::{transaction_scripts::StdlibScript, StdLibOptions};
 use crate::transaction_scripts::StdlibScript;
-use libra_types::{
+use diem_types::{
     access_path::AccessPath,
     block_metadata::BlockMetadata,
     transaction::{ChangeSet, Transaction},

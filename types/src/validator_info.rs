@@ -1,10 +1,10 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{account_address::AccountAddress, validator_config::ValidatorConfig};
-use libra_crypto::ed25519::Ed25519PublicKey;
+use diem_crypto::ed25519::Ed25519PublicKey;
 #[cfg(any(test, feature = "fuzzing"))]
-use libra_network_address::{
+use diem_network_address::{
     encrypted::{TEST_SHARED_VAL_NETADDR_KEY, TEST_SHARED_VAL_NETADDR_KEY_VERSION},
     NetworkAddress,
 };
@@ -29,11 +29,18 @@ pub struct ValidatorInfo {
     consensus_voting_power: u64,
     // Validator config
     config: ValidatorConfig,
+    // The time of last recofiguration invoked by this validator
+    // in microseconds
+    last_config_update_time: u64,
 }
 
 impl fmt::Display for ValidatorInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> std::fmt::Result {
-        write!(f, "account_address: {}", self.account_address.short_str())
+        write!(
+            f,
+            "account_address: {}",
+            self.account_address.short_str_lossless()
+        )
     }
 }
 
@@ -47,6 +54,7 @@ impl ValidatorInfo {
             account_address,
             consensus_voting_power,
             config,
+            last_config_update_time: 0,
         }
     }
 
@@ -66,14 +74,15 @@ impl ValidatorInfo {
         );
         let config = ValidatorConfig::new(
             consensus_public_key,
-            lcs::to_bytes(&vec![enc_addr.unwrap()]).unwrap(),
-            lcs::to_bytes(&vec![addr]).unwrap(),
+            bcs::to_bytes(&vec![enc_addr.unwrap()]).unwrap(),
+            bcs::to_bytes(&vec![addr]).unwrap(),
         );
 
         Self {
             account_address,
             consensus_voting_power,
             config,
+            last_config_update_time: 0,
         }
     }
 

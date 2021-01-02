@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{format_err, Error, Result};
-use libra_crypto::HashValue;
-use libra_types::{
+use diem_crypto::HashValue;
+use diem_types::{
     account_config::{
         AccountResource, AccountRole, BalanceResource, BaseUrlRotationEvent, BurnEvent,
         CancelBurnEvent, ComplianceKeyRotationEvent, CurrencyInfoResource, FreezingBit, MintEvent,
         NewBlockEvent, NewEpochEvent, PreburnEvent, ReceivedMintEvent, ReceivedPaymentEvent,
-        SentPaymentEvent, ToLBRExchangeRateUpdateEvent, UpgradeEvent,
+        SentPaymentEvent, ToXDXExchangeRateUpdateEvent, UpgradeEvent
     },
     account_state_blob::AccountStateWithProof,
     contract_event::ContractEvent,
@@ -139,10 +139,10 @@ pub enum EventDataView {
     },
     #[serde(rename = "mint")]
     Mint { amount: AmountView },
-    #[serde(rename = "to_lbr_exchange_rate_update")]
-    ToLBRExchangeRateUpdate {
+    #[serde(rename = "to_xdx_exchange_rate_update")]
+    ToXDXExchangeRateUpdate {
         currency_code: String,
-        new_to_lbr_exchange_rate: f32,
+        new_to_xdx_exchange_rate: f32,
     },
     #[serde(rename = "preburn")]
     Preburn {
@@ -250,11 +250,11 @@ impl From<(u64, ContractEvent)> for EventView {
             } else {
                 Err(format_err!("Unable to parse CancelBurnEvent"))
             }
-        } else if event.type_tag() == &TypeTag::Struct(ToLBRExchangeRateUpdateEvent::struct_tag()) {
-            if let Ok(update_event) = ToLBRExchangeRateUpdateEvent::try_from(&event) {
-                Ok(EventDataView::ToLBRExchangeRateUpdate {
+        } else if event.type_tag() == &TypeTag::Struct(ToXDXExchangeRateUpdateEvent::struct_tag()) {
+            if let Ok(update_event) = ToXDXExchangeRateUpdateEvent::try_from(&event) {
+                Ok(EventDataView::ToXDXExchangeRateUpdate {
                     currency_code: update_event.currency_code().to_string(),
-                    new_to_lbr_exchange_rate: update_event.new_to_lbr_exchange_rate(),
+                    new_to_xdx_exchange_rate: update_event.new_to_xdx_exchange_rate(),
                 })
             } else {
                 Err(format_err!("Unable to parse ToLBRExchangeRateUpdate"))
@@ -316,7 +316,7 @@ impl From<(u64, ContractEvent)> for EventView {
             } else {
                 Err(format_err!("Unable to parse NewEpochEvent"))
             }
-        } else if event.type_tag() == &TypeTag::Struct(UpgradeEvent::struct_tag()) {
+        /*} else if event.type_tag() == &TypeTag::Struct(UpgradeEvent::struct_tag()) {
             if let Ok(upgrade_event) = UpgradeEvent::try_from(&event) {
                 Ok(EventDataView::Upgrade {
                     write_set: BytesView::from(upgrade_event.write_set()),
@@ -324,7 +324,7 @@ impl From<(u64, ContractEvent)> for EventView {
             } else {
                 Err(format_err!("Unable to parse UpgradeEvent"))
             }
-        } else if event.type_tag() == &TypeTag::Struct(ComplianceKeyRotationEvent::struct_tag()) {
+        */} else if event.type_tag() == &TypeTag::Struct(ComplianceKeyRotationEvent::struct_tag()) {
             if let Ok(rotation_event) = ComplianceKeyRotationEvent::try_from(&event) {
                 Ok(EventDataView::ComplianceKeyRotation {
                     new_compliance_public_key: hex::encode(
@@ -390,6 +390,24 @@ impl From<&Vec<u8>> for BytesView {
 impl From<Vec<u8>> for BytesView {
     fn from(bytes: Vec<u8>) -> Self {
         Self(hex::encode(bytes))
+    }
+}
+
+impl From<AccountAddress> for BytesView {
+    fn from(address: AccountAddress) -> Self {
+        address.to_vec().into()
+    }
+}
+
+impl From<&AccountAddress> for BytesView {
+    fn from(address: &AccountAddress) -> Self {
+        address.to_vec().into()
+    }
+}
+
+impl From<HashValue> for BytesView {
+    fn from(hash: HashValue) -> Self {
+        hash.to_vec().into()
     }
 }
 
@@ -489,17 +507,17 @@ pub enum TransactionDataView {
     WriteSet {},
     #[serde(rename = "user")]
     UserTransaction {
-        sender: String,
+        sender: BytesView,
         signature_scheme: String,
-        signature: String,
-        public_key: String,
+        signature: BytesView,
+        public_key: BytesView,
         sequence_number: u64,
         chain_id: u8,
         max_gas_amount: u64,
         gas_unit_price: u64,
         gas_currency: String,
         expiration_timestamp_secs: u64,
-        script_hash: String,
+        script_hash: BytesView,
         script_bytes: BytesView,
         script: ScriptView,
     },
@@ -511,7 +529,7 @@ pub enum TransactionDataView {
 #[serde(tag = "type")]
 // TODO cover all script types
 pub enum ScriptView {
-    #[serde(rename = "peer_to_peer_transaction")]
+    #[serde(rename = "peer_to_peer_with_metadata")]
     PeerToPeer {
         receiver: String,
         amount: u64,
@@ -536,7 +554,7 @@ impl ScriptView {
 
 impl From<Transaction> for TransactionDataView {
     fn from(tx: Transaction) -> Self {
-        let x = match tx {
+        /*let x = match tx {
             Transaction::BlockMetadata(t) => {
                 t.into_inner().map(|x| TransactionDataView::BlockMetadata {
                     timestamp_usecs: x.1,
@@ -551,7 +569,7 @@ impl From<Transaction> for TransactionDataView {
                 .to_hex();
 
                 let script_bytes: BytesView = match t.payload() {
-                    TransactionPayload::Script(s) => lcs::to_bytes(s).unwrap_or_default(),
+                    TransactionPayload::Script(s) => bcs::to_bytes(s).unwrap_or_default(),
                     _ => vec![],
                 }
                 .into();
@@ -574,7 +592,46 @@ impl From<Transaction> for TransactionDataView {
             }
         };
 
-        x.unwrap_or(TransactionDataView::UnknownTransaction {})
+        x.unwrap_or(TransactionDataView::UnknownTransaction {})*/
+        match tx {
+            Transaction::BlockMetadata(t) => TransactionDataView::BlockMetadata {
+                timestamp_usecs: t.timestamp_usec(),
+            },
+            Transaction::GenesisTransaction(_) => TransactionDataView::WriteSet {},
+            Transaction::UserTransaction(t) => {
+                let script_hash = match t.payload() {
+                    TransactionPayload::Script(s) => HashValue::sha3_256_of(s.code()),
+                    _ => HashValue::zero(),
+                };
+
+                let script_bytes: BytesView = match t.payload() {
+                    TransactionPayload::Script(s) => bcs::to_bytes(s).unwrap_or_default(),
+                    _ => vec![],
+                }
+                    .into();
+
+                //let script: ScriptView = match t.payload() {
+                //    TransactionPayload::Script(s) => s.into(),
+                //    _ => ScriptView::unknown(),
+                //};
+
+                TransactionDataView::UserTransaction {
+                    sender: t.sender().into(),
+                    signature_scheme: t.authenticator().scheme().to_string(),
+                    signature: t.authenticator().signature_bytes().into(),
+                    public_key: t.authenticator().public_key_bytes().into(),
+                    sequence_number: t.sequence_number(),
+                    chain_id: t.chain_id().id(),
+                    max_gas_amount: t.max_gas_amount(),
+                    gas_unit_price: t.gas_unit_price(),
+                    gas_currency: t.gas_currency_code().to_string(),
+                    expiration_timestamp_secs: t.expiration_timestamp_secs(),
+                    script_hash: script_hash.into(),
+                    script_bytes,
+                    script: t.into_raw_transaction().into_payload().into(),
+                }
+            }
+        }
     }
 }
 
@@ -747,11 +804,11 @@ impl
         ),
     ) -> Result<StateProofView, Self::Error> {
         Ok(StateProofView {
-            ledger_info_with_signatures: BytesView::from(&lcs::to_bytes(
+            ledger_info_with_signatures: BytesView::from(&bcs::to_bytes(
                 &ledger_info_with_signatures,
             )?),
-            epoch_change_proof: BytesView::from(&lcs::to_bytes(&epoch_change_proof)?),
-            ledger_consistency_proof: BytesView::from(&lcs::to_bytes(&ledger_consistency_proof)?),
+            epoch_change_proof: BytesView::from(&bcs::to_bytes(&epoch_change_proof)?),
+            ledger_consistency_proof: BytesView::from(&bcs::to_bytes(&ledger_consistency_proof)?),
         })
     }
 }
@@ -770,7 +827,7 @@ impl TryFrom<AccountStateWithProof> for AccountStateWithProofView {
         account_state_with_proof: AccountStateWithProof,
     ) -> Result<AccountStateWithProofView, Error> {
         let blob = if let Some(account_blob) = account_state_with_proof.blob {
-            Some(BytesView::from(&lcs::to_bytes(&account_blob)?))
+            Some(BytesView::from(&bcs::to_bytes(&account_blob)?))
         } else {
             None
         };
@@ -794,17 +851,17 @@ impl TryFrom<AccountStateProof> for AccountStateProofView {
 
     fn try_from(account_state_proof: AccountStateProof) -> Result<AccountStateProofView, Error> {
         Ok(AccountStateProofView {
-            ledger_info_to_transaction_info_proof: BytesView::from(&lcs::to_bytes(
+            ledger_info_to_transaction_info_proof: BytesView::from(&bcs::to_bytes(
                 account_state_proof
                     .transaction_info_with_proof()
                     .ledger_info_to_transaction_info_proof(),
             )?),
-            transaction_info: BytesView::from(&lcs::to_bytes(
+            transaction_info: BytesView::from(&bcs::to_bytes(
                 account_state_proof
                     .transaction_info_with_proof()
                     .transaction_info(),
             )?),
-            transaction_info_to_account_proof: BytesView::from(&lcs::to_bytes(
+            transaction_info_to_account_proof: BytesView::from(&bcs::to_bytes(
                 account_state_proof.transaction_info_to_account_proof(),
             )?),
         })

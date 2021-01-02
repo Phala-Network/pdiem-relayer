@@ -106,11 +106,11 @@ impl ErrorMapping {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
         let mut bytes = Vec::new();
         File::open(path).unwrap().read_to_end(&mut bytes).unwrap();
-        lcs::from_bytes(&bytes).unwrap()
+        bcs::from_bytes(&bytes).unwrap()
     }
 
     pub fn to_file<P: AsRef<Path>>(&self, path: P) {
-        let bytes = lcs::to_bytes(self).unwrap();
+        let bytes = bcs::to_bytes(self).unwrap();
         let mut file = File::create(path).unwrap();
         file.write_all(&bytes).unwrap();
     }
@@ -138,6 +138,6 @@ pub const ERROR_DESCRIPTIONS: &[u8] =
 
 pub fn get_explanation(module_id: &ModuleId, abort_code: u64) -> Option<ErrorContext> {
     let error_descriptions: ErrorMapping =
-        lcs::from_bytes(ERROR_DESCRIPTIONS).unwrap();
+        bcs::from_bytes(ERROR_DESCRIPTIONS).unwrap();
     error_descriptions.get_explanation(module_id, abort_code)
 }

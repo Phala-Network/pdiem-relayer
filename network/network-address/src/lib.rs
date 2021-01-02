@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::encrypted::{EncNetworkAddress, Key, KeyVersion};
-use libra_crypto::{
+use diem_crypto::{
     traits::{CryptoMaterialError, ValidCryptoMaterialStringExt},
     x25519,
 };
@@ -89,7 +89,7 @@ const MAX_DNS_NAME_SIZE: usize = 255;
 /// use std::{str::FromStr, convert::TryFrom};
 ///
 /// let addr = NetworkAddress::from_str("/ip4/10.0.0.16/tcp/80").unwrap();
-/// let actual_ser_addr = lcs::to_bytes(&addr).unwrap();
+/// let actual_ser_addr = bcs::to_bytes(&addr).unwrap();
 ///
 /// let expected_ser_addr: Vec<u8> = [9, 2, 0, 10, 0, 0, 16, 5, 80, 0].to_vec();
 ///
@@ -175,7 +175,7 @@ pub enum ParseError {
     DecryptError,
 
     #[error("lcs error: {0}")]
-    LCSError(#[from] lcs::Error),
+    LCSError(#[from] bcs::Error),
 }
 
 #[derive(Error, Debug)]
@@ -419,7 +419,7 @@ impl Serialize for NetworkAddress {
             #[serde(rename = "NetworkAddress")]
             struct Wrapper<'a>(#[serde(with = "serde_bytes")] &'a [u8]);
 
-            lcs::to_bytes(&self.as_slice())
+            bcs::to_bytes(&self.as_slice())
                 .map_err(serde::ser::Error::custom)
                 .and_then(|v| Wrapper(&v).serialize(serializer))
         }
@@ -440,7 +440,7 @@ impl<'de> Deserialize<'de> for NetworkAddress {
             struct Wrapper(#[serde(with = "serde_bytes")] Vec<u8>);
 
             Wrapper::deserialize(deserializer)
-                .and_then(|v| lcs::from_bytes(&v.0).map_err(de::Error::custom))
+                .and_then(|v| bcs::from_bytes(&v.0).map_err(de::Error::custom))
                 .and_then(|v: Vec<Protocol>| NetworkAddress::try_from(v).map_err(de::Error::custom))
         }
     }
@@ -777,7 +777,7 @@ fn parse_libranet_protos(protos: &[Protocol]) -> Option<&[Protocol]> {
 mod test {
     use super::*;
     use anyhow::format_err;
-    use lcs::test_helpers::assert_canonical_encode_decode;
+    use bcs::test_helpers::assert_canonical_encode_decode;
 
     #[test]
     fn test_network_address_display() {

@@ -9,8 +9,8 @@
 
 use anyhow::{anyhow, Error, Result};
 use include_dir::{include_dir, Dir};
-use libra_crypto::HashValue;
-use libra_types::transaction::{ScriptABI, SCRIPT_HASH_LENGTH};
+use diem_crypto::HashValue;
+use diem_types::transaction::{ScriptABI, SCRIPT_HASH_LENGTH};
 use std::{convert::TryFrom, fmt, path::PathBuf};
 
 // This includes the script ABIs as binaries. We must use this hack to work around
@@ -138,7 +138,7 @@ impl StdlibScript {
             .get_file(path.clone())
             .unwrap_or_else(|| panic!("File {:?} does not exist", path))
             .contents();
-        lcs::from_bytes(content)
+        bcs::from_bytes(content)
             .unwrap_or_else(|err| panic!("Failed to deserialize ABI file {:?}: {}", path, err))
     }
 
