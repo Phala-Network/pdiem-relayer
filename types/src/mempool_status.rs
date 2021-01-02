@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![allow(clippy::unit_arg)]
@@ -8,7 +8,7 @@ use anyhow::Result;
 use proptest::prelude::*;
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest_derive::Arbitrary;
-use std::convert::TryFrom;
+use std::{convert::TryFrom, fmt};
 
 /// A `MempoolStatus` is represented as a required status code that is semantic coupled with an optional sub status and message.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -75,5 +75,11 @@ impl TryFrom<u64> for MempoolStatusCode {
 impl From<MempoolStatusCode> for u64 {
     fn from(status: MempoolStatusCode) -> u64 {
         status as u64
+    }
+}
+
+impl fmt::Display for MempoolStatusCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
     }
 }

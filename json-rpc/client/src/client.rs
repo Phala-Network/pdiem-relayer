@@ -3,7 +3,7 @@
 
 use crate::{errors::JsonRpcError, views::AccountView, JsonRpcResponse};
 use anyhow::{ensure, format_err, Error, Result};
-use libra_types::{account_address::AccountAddress, transaction::SignedTransaction};
+use diem_types::{account_address::AccountAddress, transaction::SignedTransaction};
 use reqwest::{Client, ClientBuilder, StatusCode, Url};
 use serde_json::{json, Value};
 use std::{collections::HashSet, convert::TryFrom, fmt, time::Duration};
@@ -35,7 +35,7 @@ impl JsonRpcBatch {
     }
 
     pub fn add_submit_request(&mut self, transaction: SignedTransaction) -> Result<()> {
-        let txn_payload = hex::encode(lcs::to_bytes(&transaction)?);
+        let txn_payload = hex::encode(bcs::to_bytes(&transaction)?);
         self.add_request("submit".to_string(), vec![Value::String(txn_payload)]);
         Ok(())
     }

@@ -136,7 +136,7 @@
 pub mod prelude {
     pub use crate::{
         debug, error, event, info,
-        libra_logger::FileWriter,
+        diem_logger::FileWriter,
         sample,
         sample::{SampleRate, Sampling},
         security::SecurityEvent,
@@ -148,7 +148,7 @@ pub mod json_log;
 mod event;
 mod filter;
 mod kv;
-mod libra_logger;
+mod diem_logger;
 mod logger;
 mod macros;
 mod metadata;
@@ -157,7 +157,7 @@ pub mod sample;
 mod security;
 mod struct_log;
 
-pub use crate::libra_logger::{
+pub use crate::diem_logger::{
     LibraLogger, LibraLogger as Logger, LibraLoggerBuilder, Writer, CHANNEL_SIZE,
 };
 pub use event::Event;
@@ -165,7 +165,7 @@ pub use filter::{Filter, LevelFilter};
 pub use metadata::{Level, Metadata};
 
 pub use kv::{Key, KeyValue, Schema, Value, Visitor};
-pub use libra_log_derive::Schema;
+pub use diem_log_derive::Schema;
 pub use security::SecurityEvent;
 
 mod counters;

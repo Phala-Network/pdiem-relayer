@@ -1,10 +1,10 @@
 [package]
 name = "transaction-builder-generated"
 version = "0.1.0"
-authors = ["Libra Association <opensource@libra.org>"]
+authors = ["Diem Association <opensource@diem.com>"]
 description = "Generated transaction builders"
-repository = "https://github.com/libra/libra"
-homepage = "https://libra.org"
+repository = "https://github.com/diem/diem"
+homepage = "https://diem.com"
 license = "Apache-2.0"
 edition = "2018"
 
@@ -15,15 +15,15 @@ anyhow = "1.0.32"
 include_dir = "0.6.0"
 
 # compiled-stdlib = { path = "../../language/stdlib/compiled",  version = "0.1.0" }
-lcs = { path = "../../common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
+bcs = "0.1.2"
 move-core-types = { path = "../../language/move-core/types", version = "0.1.0" }
-libra-types = { path = "../../types", version = "0.1.0" }
-libra-crypto = { path = "../../crypto/crypto", version = "0.1.0" }
+diem-types = { path = "../../types", version = "0.1.0" }
+diem-crypto = { path = "../../crypto/crypto", version = "0.1.0" }
 
 proptest = { version = "0.10.1", optional = true }
 proptest-derive = { version = "0.2.0", optional = true }
-libra-proptest-helpers = { path = "../../common/proptest-helpers", version = "0.1.0", optional = true }
+diem-proptest-helpers = { path = "../../common/proptest-helpers", version = "0.1.0", optional = true }
 
 [features]
 default = []
-fuzzing = ["proptest", "proptest-derive", "libra-proptest-helpers", "move-core-types/fuzzing"]
+fuzzing = ["proptest", "proptest-derive", "diem-proptest-helpers", "move-core-types/fuzzing"]

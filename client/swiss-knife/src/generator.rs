@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::helpers;
-use libra_crypto::{
+use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey, Ed25519Signature},
     hash::CryptoHash,
     test_utils::KeyPair,
     Signature, SigningKey, Uniform, ValidCryptoMaterialStringExt,
 };
-use libra_types::{
+use diem_types::{
     chain_id::ChainId,
     transaction::{
         authenticator::AuthenticationKey, RawTransaction, SignedTransaction, Transaction,
@@ -193,7 +193,7 @@ pub fn generate_raw_txn(g: GenerateRawTxnRequest) -> GenerateRawTxnResponse {
         }
     };
     let payload = TransactionPayload::Script(script);
-    let script_hex = hex::encode(lcs::to_bytes(&payload).unwrap());
+    let script_hex = hex::encode(bcs::to_bytes(&payload).unwrap());
     let raw_txn = RawTransaction::new(
         helpers::account_address_parser(&g.txn_params.sender_address),
         g.txn_params.sequence_number,
@@ -207,7 +207,7 @@ pub fn generate_raw_txn(g: GenerateRawTxnRequest) -> GenerateRawTxnResponse {
     GenerateRawTxnResponse {
         script: script_hex,
         raw_txn: hex::encode(
-            lcs::to_bytes(&raw_txn)
+            bcs::to_bytes(&raw_txn)
                 .map_err(|err| {
                     helpers::exit_with_error(format!(
                         "lcs serialization failure of raw_txn : {}",
@@ -235,7 +235,7 @@ pub struct GenerateSignedTxnResponse {
 }
 
 pub fn generate_signed_txn(request: GenerateSignedTxnRequest) -> GenerateSignedTxnResponse {
-    let raw_txn: RawTransaction = lcs::from_bytes(
+    let raw_txn: RawTransaction = bcs::from_bytes(
         &hex::decode(request.raw_txn.clone())
             .map_err(|err| {
                 helpers::exit_with_error(format!("hex decode of raw_txn failed : {}", err))
@@ -265,7 +265,7 @@ pub fn generate_signed_txn(request: GenerateSignedTxnRequest) -> GenerateSignedT
     let signed_txn = SignedTransaction::new(raw_txn, public_key, signature);
     let txn_hash = CryptoHash::hash(&Transaction::UserTransaction(signed_txn.clone())).to_hex();
     let signed_txn = hex::encode(
-        lcs::to_bytes(&signed_txn)
+        bcs::to_bytes(&signed_txn)
             .map_err(|err| {
                 helpers::exit_with_error(format!(
                     "lcs serialization failure of signed_txn : {}",
@@ -285,17 +285,17 @@ pub fn generate_signed_txn(request: GenerateSignedTxnRequest) -> GenerateSignedT
 pub struct GenerateKeypairResponse {
     pub private_key: String,
     pub public_key: String,
-    pub libra_auth_key: String,
-    pub libra_account_address: String,
+    pub diem_auth_key: String,
+    pub diem_account_address: String,
 }
 
 pub fn generate_key_pair(seed: Option<u64>) -> GenerateKeypairResponse {
     let mut rng = StdRng::seed_from_u64(seed.unwrap_or_else(rand::random));
     let keypair: KeyPair<Ed25519PrivateKey, Ed25519PublicKey> =
         Ed25519PrivateKey::generate(&mut rng).into();
-    let libra_auth_key = AuthenticationKey::ed25519(&keypair.public_key);
-    let libra_account_address: String = libra_auth_key.derived_address().to_string();
-    let libra_auth_key: String = libra_auth_key.to_string();
+    let diem_auth_key = AuthenticationKey::ed25519(&keypair.public_key);
+    let diem_account_address: String = diem_auth_key.derived_address().to_string();
+    let diem_auth_key: String = diem_auth_key.to_string();
     GenerateKeypairResponse {
         private_key: keypair
             .private_key
@@ -311,8 +311,8 @@ pub fn generate_key_pair(seed: Option<u64>) -> GenerateKeypairResponse {
                 helpers::exit_with_error(format!("Failed to encode public key : {}", err))
             })
             .unwrap(),
-        libra_auth_key,
-        libra_account_address,
+        diem_auth_key,
+        diem_account_address,
     }
 }
 
@@ -336,7 +336,7 @@ pub struct SignTransactionUsingEd25519Response {
 pub fn sign_transaction_using_ed25519(
     request: SignTransactionUsingEd25519Request,
 ) -> SignTransactionUsingEd25519Response {
-    let raw_txn: RawTransaction = lcs::from_bytes(
+    let raw_txn: RawTransaction = bcs::from_bytes(
         &hex::decode(request.raw_txn.clone())
             .map_err(|err| {
                 helpers::exit_with_error(format!("hex decode of raw_txn failed : {}", err))
@@ -431,7 +431,7 @@ pub struct VerifyTransactionEd25519SignatureResponse {
 pub fn verify_transaction_signature_using_ed25519(
     request: VerifyTransactionEd25519SignatureRequest,
 ) -> VerifyTransactionEd25519SignatureResponse {
-    let raw_txn: RawTransaction = lcs::from_bytes(
+    let raw_txn: RawTransaction = bcs::from_bytes(
         &hex::decode(request.raw_txn.clone())
             .map_err(|err| {
                 helpers::exit_with_error(format!("hex decode of raw_txn failed : {}", err))

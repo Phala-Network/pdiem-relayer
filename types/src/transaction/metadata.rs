@@ -1,7 +1,7 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! This file implements Libra transaction metadata types to allow
+//! This file implements Diem transaction metadata types to allow
 //! easy parsing and introspection into metadata, whether the transaction
 //! is using regular subaddressing, is subject to travel rule or corresponds
 //! to an on-chain payment refund.
@@ -40,6 +40,32 @@ pub struct GeneralMetadataV0 {
     /// event field allows a refunded payment to refer back to the original
     /// payment
     referenced_event: Option<u64>,
+}
+
+impl GeneralMetadataV0 {
+    pub fn new(
+        to_subaddress: Option<Vec<u8>>,
+        from_subaddress: Option<Vec<u8>>,
+        referenced_event: Option<u64>,
+    ) -> Self {
+        GeneralMetadataV0 {
+            to_subaddress,
+            from_subaddress,
+            referenced_event,
+        }
+    }
+
+    pub fn to_subaddress(&self) -> &Option<Vec<u8>> {
+        &self.to_subaddress
+    }
+
+    pub fn from_subaddress(&self) -> &Option<Vec<u8>> {
+        &self.from_subaddress
+    }
+
+    pub fn referenced_event(&self) -> &Option<u64> {
+        &self.referenced_event
+    }
 }
 
 /// List of supported transaction metadata format versions for transactions

@@ -1,15 +1,12 @@
-use libra_client::{
-    client::{
-        LibraClient,
-    },
+use diem_client::{
     AccountData,
     AccountStatus,
 };
 use rand::{rngs::OsRng, Rng, SeedableRng};
 use anyhow::{bail, ensure, Result};
-use libra_logger::prelude::*;
+use diem_logger::prelude::*;
 use reqwest::Url;
-use libra_crypto::{hash::{CryptoHash, HashValue}, ed25519::{Ed25519PrivateKey, Ed25519PublicKey, }, Uniform, test_utils::KeyPair, ValidCryptoMaterialStringExt};
+use diem_crypto::{hash::{CryptoHash, HashValue}, ed25519::{Ed25519PrivateKey, Ed25519PublicKey, }, Uniform, test_utils::KeyPair, ValidCryptoMaterialStringExt};
 use swiss_knife::generator::{
     GenerateRawTxnRequest, GenerateRawTxnResponse,
     GenerateSignedTxnRequest, GenerateSignedTxnResponse,
@@ -17,16 +14,16 @@ use swiss_knife::generator::{
     generate_raw_txn, generate_signed_txn, sign_transaction_using_ed25519,
 };
 
-use libra_types::{
+use diem_types::{
     access_path::AccessPath,
     account_address::{
         AccountAddress,
         from_public_key,
     },
     account_config::{
-        from_currency_code_string, libra_root_address, testnet_dd_account_address,
+        from_currency_code_string, diem_root_address, testnet_dd_account_address,
         treasury_compliance_account_address, type_tag_for_currency_code,
-        ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH, LBR_NAME,
+        ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH,
     },
     account_state::AccountState,
     chain_id::ChainId,
@@ -50,7 +47,7 @@ use libra_types::{
     trusted_state::{TrustedState, TrustedStateChange},
     waypoint::Waypoint,
 };
-use libra_json_rpc_client::{
+use diem_json_rpc_client::{
     get_response_from_batch,
     views::{
         AccountStateWithProofView, AccountView, BlockMetadata, BytesView, CurrencyInfoView,
@@ -59,9 +56,9 @@ use libra_json_rpc_client::{
     JsonRpcBatch, JsonRpcClient, JsonRpcResponse, ResponseAsView,
 };
 use std::{convert::TryFrom, sync::Arc, io};
-use libra_json_rpc_types::views::AmountView;
-use libra_types::proof::AccumulatorProof;
-use libra_types::account_state_blob::{AccountStateWithProof, AccountStateBlob};
+use diem_json_rpc_types::views::AmountView;
+use diem_types::proof::AccumulatorProof;
+use diem_types::account_state_blob::{AccountStateWithProof, AccountStateBlob};
 use rustyline::{config::CompletionType, error::ReadlineError, Config, Editor};
 use std::ops::Add;
 
@@ -124,7 +121,7 @@ impl LibraDemo {
                 new_state,
                 latest_epoch_change_li,
             } => {
-                info!(
+                println!(
                     "Verified epoch changed to {}",
                     latest_epoch_change_li
                         .ledger_info()
@@ -137,7 +134,7 @@ impl LibraDemo {
             }
             TrustedStateChange::Version { new_state } => {
                 if self.trusted_state.as_mut().unwrap().latest_version() < new_state.latest_version() {
-                    info!("Verified version change to: {}", new_state.latest_version());
+                    println!("Verified version change to: {}", new_state.latest_version());
                 }
                 self.trusted_state = Option::from(new_state);
             }
@@ -172,19 +169,19 @@ impl LibraDemo {
     ) -> Result<()> {
         let tx_json = serde_json::json!({
             "txn_params": {
-            "sender_address": "0xe1b3d22871989e9fd9dc6814b2f4fc41",
-            "sequence_number": 42,
+            "sender_address": "0xd4f0c053205ba934bb2ac0c4e8479e77",
+            "sequence_number": 0,
             "max_gas_amount": 1000000,
             "gas_unit_price": 0,
-            "gas_currency_code": "LBR",
+            "gas_currency_code": "XUS",
             "chain_id": "TESTING",
-            "expiration_timestamp_secs": 1593189628
+            "expiration_timestamp_secs": 1609585373
           },
           "script_params": {
             "peer_to_peer_transfer": {
-              "coin_tag": "LBR",
-              "recipient_address": "0x71e931795d23e9634fd24a5992065f6b",
-              "amount": 100,
+              "coin_tag": "XUS",
+              "recipient_address": "0x57c76da2e144c0357336ace2f3f8ac9b",
+              "amount": 10,
               "metadata_hex_encoded": "",
               "metadata_signature_hex_encoded": ""
             }
@@ -200,7 +197,7 @@ impl LibraDemo {
         let s_resp:SignTransactionUsingEd25519Response = sign_transaction_using_ed25519(s_res);
         let gs_res:GenerateSignedTxnRequest = GenerateSignedTxnRequest{
             raw_txn: g_resp.raw_txn.clone(),
-            public_key: self.account.as_ref().unwrap().key_pair.as_ref().unwrap().private_key.to_encoded_string().unwrap().clone(),
+            public_key: self.account.as_ref().unwrap().key_pair.as_ref().unwrap().public_key.to_encoded_string().unwrap().clone(),
             signature: s_resp.signature.clone(),
         };
         let gs_resp:GenerateSignedTxnResponse = generate_signed_txn(gs_res);
@@ -220,13 +217,15 @@ impl LibraDemo {
         let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
 
         let mut state_proof = StateProofView::from_response(resp.clone()).unwrap();
-        let epoch_change_proof: EpochChangeProof =
-            lcs::from_bytes(&state_proof.epoch_change_proof.into_bytes().unwrap()).unwrap();
-        let ledger_info_with_signatures: LedgerInfoWithSignatures =
-            lcs::from_bytes(&state_proof.ledger_info_with_signatures.into_bytes().unwrap()).unwrap();
+        println!("state_proof:\n{:?}", state_proof);
 
-        let ledger_consistency_proof: AccumulatorConsistencyProof =
-            lcs::from_bytes(&state_proof.ledger_consistency_proof.into_bytes().unwrap()).unwrap();
+        let epoch_change_proof: EpochChangeProof =
+            bcs::from_bytes(&state_proof.epoch_change_proof.into_bytes().unwrap()).unwrap();
+        let ledger_info_with_signatures: LedgerInfoWithSignatures =
+            bcs::from_bytes(&state_proof.ledger_info_with_signatures.into_bytes().unwrap()).unwrap();
+
+        //let ledger_consistency_proof: AccumulatorConsistencyProof =
+        //    bcs::from_bytes(&state_proof.ledger_consistency_proof.into_bytes().unwrap()).unwrap();
         // Init zero version state
         let zero_ledger_info_with_sigs = epoch_change_proof.ledger_info_with_sigs[0].clone();
 
@@ -247,7 +246,7 @@ impl LibraDemo {
     ) -> Result<()> {
         // Init acoount information
         let mut batch = JsonRpcBatch::new();
-        let mut address = AccountAddress::from_hex_literal("0x34a3675f875d8edeea6076ad1b560a11").unwrap();
+        let mut address = AccountAddress::from_hex_literal("0xd4f0c053205ba934bb2ac0c4e8479e77").unwrap();
         batch.add_get_account_request(address);
         let responses = self.rpc_client.execute(batch).unwrap();
         let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
@@ -300,7 +299,7 @@ impl LibraDemo {
     ) -> Result<()> {
         let transactions= self.transactions.as_ref().unwrap().clone();
         for transaction in transactions {
-            //println!("{:#?}", transaction);
+            println!("{:#?}", transaction);
             let mut batch = JsonRpcBatch::new();
             let mut account = self.account.as_ref().unwrap().address.clone();
             batch.add_get_account_state_with_proof_request(account, Some(transaction.version), Some(self.trusted_state.as_ref().unwrap().latest_version()));
@@ -310,13 +309,13 @@ impl LibraDemo {
                 AccountStateWithProofView::from_response(resp.clone()).unwrap();
 
             let ledger_info_to_transaction_info_proof: TransactionAccumulatorProof =
-                lcs::from_bytes(&account_state_proof.proof.ledger_info_to_transaction_info_proof.into_bytes().unwrap()).unwrap();
+                bcs::from_bytes(&account_state_proof.proof.ledger_info_to_transaction_info_proof.into_bytes().unwrap()).unwrap();
             let transaction_info: TransactionInfo =
-                lcs::from_bytes(&account_state_proof.proof.transaction_info.into_bytes().unwrap()).unwrap();
+                bcs::from_bytes(&account_state_proof.proof.transaction_info.into_bytes().unwrap()).unwrap();
             let transaction_info_to_account_proof: SparseMerkleProof =
-                lcs::from_bytes(&account_state_proof.proof.transaction_info_to_account_proof.into_bytes().unwrap()).unwrap();
+                bcs::from_bytes(&account_state_proof.proof.transaction_info_to_account_proof.into_bytes().unwrap()).unwrap();
             let account_state_blob: AccountStateBlob =
-                lcs::from_bytes(&account_state_proof.blob.unwrap().into_bytes().unwrap()).unwrap();
+                bcs::from_bytes(&account_state_proof.blob.unwrap().into_bytes().unwrap()).unwrap();
             //println!("{:#?}", account_state_blob);
 
 
@@ -351,9 +350,10 @@ impl LibraDemo {
 
 fn main() {
     let mut input = String::new();
-    print!("libra-demo:");
+    print!("diem-demo:");
 
-    let mut demo = LibraDemo::new("https://client.testnet.libra.org/v1").unwrap();
+    //let mut demo = LibraDemo::new("https://testnet.diem.com/v1").unwrap();
+    let mut demo = LibraDemo::new("http://127.0.0.1:8080").unwrap();
     let generate_account = String::from("generate account");
     let generate_transaction = String::from("generate transaction");
     let init_state = String::from("init state");
@@ -366,7 +366,7 @@ fn main() {
         .build();
     let mut rl = Editor::<()>::with_config(config);
     loop {
-        let readline = rl.readline("libra% ");
+        let readline = rl.readline("diem% ");
         match readline {
             Ok(line) => {
                 if line.eq(&generate_account) {

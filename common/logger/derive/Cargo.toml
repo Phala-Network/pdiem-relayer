@@ -1,5 +1,5 @@
 [package]
-name = "libra-log-derive"
+name = "diem-log-derive"
 version = "0.1.0"
 authors = ["Libra Association <opensource@libra.org>"]
 repository = "https://github.com/libra/libra"

@@ -1,10 +1,10 @@
 [package]
 name = "move-explain"
 version = "0.1.0"
-authors = ["Libra Association <opensource@libra.org>"]
-description = "Libra Move abort code explanations"
-repository = "https://github.com/libra/libra"
-homepage = "https://libra.org"
+authors = ["Diem Association <opensource@diem.com>"]
+description = "Diem Move abort code explanations"
+repository = "https://github.com/diem/diem"
+homepage = "https://diem.com"
 license = "Apache-2.0"
 publish = false
 edition = "2018"
@@ -18,7 +18,7 @@ log = "0.4.11"
 # compiled-stdlib = { path = "../../stdlib/compiled", version = "0.1.0" }
 # errmapgen = { path = "../../move-prover/errmapgen", version = "0.1.0" }
 move-core-types = { path = "../../move-core/types", version = "0.1.0" }
-lcs = { path = "../../../common/lcs", version = "0.1.0", package = "libra-canonical-serialization" }
+bcs = "0.1.2"
 
 [features]
 default = []

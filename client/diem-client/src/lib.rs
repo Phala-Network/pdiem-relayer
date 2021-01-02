@@ -1,12 +1,12 @@
-use libra_crypto::{
+use diem_crypto::{
     ed25519::{Ed25519PrivateKey, Ed25519PublicKey},
     test_utils::KeyPair,
     traits::ValidCryptoMaterialStringExt,
 };
-use libra_types::account_address::AccountAddress;
+use diem_types::account_address::AccountAddress;
 use serde::{Deserialize, Serialize};
 
-pub mod client;
+//pub mod client;
 
 /// Struct used to store data for each created account.  We track the sequence number
 /// so we can create new transactions easily
