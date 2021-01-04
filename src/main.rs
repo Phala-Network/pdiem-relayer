@@ -1,12 +1,14 @@
+use structopt::StructOpt;
+
 use diem_client::{
     AccountData,
     AccountStatus,
 };
 use rand::{rngs::OsRng, Rng, SeedableRng};
-use anyhow::{bail, ensure, Result};
-use diem_logger::prelude::*;
+use anyhow::{ensure, Result};
+//use diem_logger::prelude::*;
 use reqwest::Url;
-use diem_crypto::{hash::{CryptoHash, HashValue}, ed25519::{Ed25519PrivateKey, Ed25519PublicKey, }, Uniform, test_utils::KeyPair, ValidCryptoMaterialStringExt};
+use diem_crypto::{hash::{CryptoHash}, ed25519::{Ed25519PrivateKey, Ed25519PublicKey, }, Uniform, test_utils::KeyPair, ValidCryptoMaterialStringExt};
 use swiss_knife::generator::{
     GenerateRawTxnRequest, GenerateRawTxnResponse,
     GenerateSignedTxnRequest, GenerateSignedTxnResponse,
@@ -15,28 +17,16 @@ use swiss_knife::generator::{
 };
 
 use diem_types::{
-    access_path::AccessPath,
     account_address::{
         AccountAddress,
-        from_public_key,
     },
-    account_config::{
-        from_currency_code_string, diem_root_address, testnet_dd_account_address,
-        treasury_compliance_account_address, type_tag_for_currency_code,
-        ACCOUNT_RECEIVED_EVENT_PATH, ACCOUNT_SENT_EVENT_PATH,
-    },
-    account_state::AccountState,
     chain_id::ChainId,
     ledger_info::LedgerInfoWithSignatures,
     transaction::{
         TransactionInfo,
         authenticator::AuthenticationKey,
-        helpers::{create_unsigned_txn, create_user_txn, TransactionSigner},
-        parse_transaction_argument, Module, RawTransaction, Script, SignedTransaction,
-        TransactionArgument, TransactionPayload, Version, WriteSetPayload,
     },
     epoch_change::EpochChangeProof,
-    epoch_state::EpochState,
     proof::{
         AccountStateProof,
         TransactionInfoWithProof,
@@ -45,25 +35,31 @@ use diem_types::{
         AccumulatorConsistencyProof,
     },
     trusted_state::{TrustedState, TrustedStateChange},
-    waypoint::Waypoint,
 };
 use diem_json_rpc_client::{
     get_response_from_batch,
     views::{
-        AccountStateWithProofView, AccountView, BlockMetadata, BytesView, CurrencyInfoView,
+        AccountStateWithProofView, AccountView, BytesView,
         EventView, StateProofView, TransactionView,
     },
-    JsonRpcBatch, JsonRpcClient, JsonRpcResponse, ResponseAsView,
+    JsonRpcBatch, JsonRpcClient, ResponseAsView,
 };
-use std::{convert::TryFrom, sync::Arc, io};
+use std::{convert::TryFrom};
 use diem_json_rpc_types::views::AmountView;
 use diem_types::proof::AccumulatorProof;
 use diem_types::account_state_blob::{AccountStateWithProof, AccountStateBlob};
-use rustyline::{config::CompletionType, error::ReadlineError, Config, Editor};
 use std::ops::Add;
 
+#[derive(Debug, StructOpt)]
+#[structopt(name = "pDiem")]
+struct Args {
+    #[structopt(
+    default_value = "http://127.0.0.1:8080", long,
+    help = "Diem rpc endpoint")]
+    diem_rpc_endpoint: String, //official rpc endpoint: https://testnet.diem.com/v1
+}
 
-pub struct LibraDemo {
+pub struct DiemDemo {
     chain_id: ChainId,
     rpc_client: JsonRpcClient,
     trusted_state: Option<TrustedState>,
@@ -77,10 +73,10 @@ pub struct LibraDemo {
     account: Option<AccountData>,
     balances: Option<Vec<AmountView>>,
 }
-impl LibraDemo {
+impl DiemDemo {
     pub fn new(url: &str) -> Result<Self> {
         let rpc_client = JsonRpcClient::new(Url::parse(url).unwrap()).unwrap();
-        Ok(LibraDemo {
+        Ok(DiemDemo {
             chain_id: ChainId::new(2),
             rpc_client,
             sent_events_key: None,
@@ -96,7 +92,7 @@ impl LibraDemo {
         })
     }
 
-    pub fn verify_state_proof(
+    fn verify_state_proof(
         &mut self,
         li: LedgerInfoWithSignatures,
         epoch_change_proof: EpochChangeProof
@@ -143,7 +139,7 @@ impl LibraDemo {
         Ok(())
     }
 
-    pub fn generate_account(
+    pub fn _generate_account(
         &mut self
     ) -> Result<()> {
         let mut seed_rng = OsRng;
@@ -164,7 +160,7 @@ impl LibraDemo {
         Ok(())
     }
 
-    pub fn generate_transaction(
+    pub fn _generate_transaction(
         &mut self
     ) -> Result<()> {
         let tx_json = serde_json::json!({
@@ -216,7 +212,7 @@ impl LibraDemo {
 
         let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
 
-        let mut state_proof = StateProofView::from_response(resp.clone()).unwrap();
+        let state_proof = StateProofView::from_response(resp.clone()).unwrap();
         println!("state_proof:\n{:?}", state_proof);
 
         let epoch_change_proof: EpochChangeProof =
@@ -234,7 +230,7 @@ impl LibraDemo {
         self.latest_li = Option::from(ledger_info_with_signatures.clone());
 
         // Update Latest version state
-        self.verify_state_proof(ledger_info_with_signatures, epoch_change_proof);
+        let _ = self.verify_state_proof(ledger_info_with_signatures, epoch_change_proof);
         println!("{:#?}", self.trusted_state);
         println!("{:#?}", self.latest_li);
         Ok(())
@@ -242,66 +238,102 @@ impl LibraDemo {
 
 
     pub fn init_account(
-        &mut self
+        &mut self,
+        account_address: String,
     ) -> Result<()> {
-        // Init acoount information
+        // Init account information
         let mut batch = JsonRpcBatch::new();
-        let mut address = AccountAddress::from_hex_literal("0xd4f0c053205ba934bb2ac0c4e8479e77").unwrap();
+        let address = AccountAddress::from_hex_literal(&account_address).unwrap();
         batch.add_get_account_request(address);
         let responses = self.rpc_client.execute(batch).unwrap();
         let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
-        let op_account_view = AccountView::optional_from_response(resp.clone()).unwrap();
-        // println!("{:#?}", op_account_view);
-        let account_view = op_account_view.expect("AccountView deserialization error");
-        self.account = Option::from(AccountData {
-            address: address,
-            authentication_key: account_view.authentication_key.into_bytes().ok(),
-            key_pair: None,
-            sequence_number: account_view.sequence_number,
-            status: AccountStatus::Persisted,
-        });
-        self.sent_events_key = Option::from(account_view.sent_events_key.clone());
-        self.received_events_key = Option::from(account_view.received_events_key.clone());
-        self.balances = Option::from(account_view.balances.clone());
+        println!("{:?}", resp);
+        match AccountView::optional_from_response(resp.clone()).unwrap() {
+            Some(account_view) => {
+                println!("account_view:{:?}", account_view);
+                self.account = Option::from(AccountData {
+                    address: address,
+                    authentication_key: account_view.authentication_key.into_bytes().ok(),
+                    key_pair: None,
+                    sequence_number: account_view.sequence_number,
+                    status: AccountStatus::Persisted,
+                });
+                self.sent_events_key = Option::from(account_view.sent_events_key.clone());
+                self.received_events_key = Option::from(account_view.received_events_key.clone());
+                self.balances = Option::from(account_view.balances.clone());
 
-        // Init sent events
-        let mut batch = JsonRpcBatch::new();
-        let sent_events_key = account_view.sent_events_key.0.clone();
-        batch.add_get_events_request(sent_events_key.to_string(), 0, account_view.sequence_number.clone());
-        let responses = self.rpc_client.execute(batch).unwrap();
-        let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
-        self.sent_events = Option::from(EventView::vec_from_response(resp.clone()).unwrap());
+                // Init sent events
+                let mut batch = JsonRpcBatch::new();
+                let sent_events_key = account_view.sent_events_key.0.clone();
+                batch.add_get_events_request(sent_events_key.to_string(), 0, account_view.sequence_number.clone());
+                let responses = self.rpc_client.execute(batch).unwrap();
+                match get_response_from_batch(0, &responses).unwrap().as_ref() {
+                    Ok(resp) => {
+                        self.sent_events = Option::from(EventView::vec_from_response(resp.clone()).unwrap());
+                    },
+                    Err(_) => {
+                        self.sent_events = None;
+                    }
+                }
 
-        // Init revived events
-        let mut batch = JsonRpcBatch::new();
-        let received_events_key = account_view.received_events_key.0.clone();
-        batch.add_get_events_request(received_events_key.to_string(), 0, account_view.sequence_number.clone());
-        let responses = self.rpc_client.execute(batch).unwrap();
-        let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
-        self.received_events = Option::from(EventView::vec_from_response(resp.clone()).unwrap());
+                // Init received events
+                let mut batch = JsonRpcBatch::new();
+                let received_events_key = account_view.received_events_key.0.clone();
+                batch.add_get_events_request(received_events_key.to_string(), 0, account_view.sequence_number.clone());
+                let responses = self.rpc_client.execute(batch).unwrap();
+                match get_response_from_batch(0, &responses).unwrap().as_ref() {
+                    Ok(resp) => {
+                        self.received_events = Option::from(EventView::vec_from_response(resp.clone()).unwrap());
+                    },
+                    Err(_) => {
+                        self.received_events = None;
+                    }
+                }
 
-        // Init transactions
-        let mut batch = JsonRpcBatch::new();
-        batch.add_get_account_transactions_request(self.account.as_ref().unwrap().address.clone(),0, self.account.as_ref().unwrap().sequence_number.clone(), true);
-        let responses = self.rpc_client.execute(batch).unwrap();
-        let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
-        self.transactions = Option::from(TransactionView::vec_from_response(resp.clone()).unwrap());
+                // Init transactions
+                let mut batch = JsonRpcBatch::new();
+                batch.add_get_account_transactions_request(self.account.as_ref().unwrap().address.clone(),0, self.account.as_ref().unwrap().sequence_number.clone(), true);
+                let responses = self.rpc_client.execute(batch).unwrap();
+                match get_response_from_batch(0, &responses).unwrap().as_ref() {
+                    Ok(resp) => {
+                        self.transactions = Option::from(TransactionView::vec_from_response(resp.clone()).unwrap());
+                    },
+                    Err(_) => {
+                        self.transactions = None;
+                    }
+                }
+            },
+            None => {
+                self.account = None;
+                self.sent_events_key = None;
+                self.received_events_key = None;
+                self.balances = None;
+                self.sent_events = None;
+                self.received_events = None;
+                self.transactions = None;
+            }
+        }
 
-        // println!("{:#?}", self.account);
-        // println!("{:#?}", self.sent_events);
-        // println!("{:#?}", self.received_events);
-        println!("{:#?}", self.transactions);
+        println!("account: {:#?}", self.account);
+        println!("sent_events: {:#?}", self.sent_events);
+        println!("received_events: {:#?}", self.received_events);
+        println!("transactions: {:#?}", self.transactions);
         Ok(())
     }
 
     pub fn verify_transactions(
         &mut self,
     ) -> Result<()> {
+        if self.transactions.is_none() {
+            println!("No transactions");
+            return Ok(());
+        }
+
         let transactions= self.transactions.as_ref().unwrap().clone();
         for transaction in transactions {
             println!("{:#?}", transaction);
             let mut batch = JsonRpcBatch::new();
-            let mut account = self.account.as_ref().unwrap().address.clone();
+            let account = self.account.as_ref().unwrap().address.clone();
             batch.add_get_account_state_with_proof_request(account, Some(transaction.version), Some(self.trusted_state.as_ref().unwrap().latest_version()));
             let responses = self.rpc_client.execute(batch).unwrap();
             let resp = get_response_from_batch(0, &responses).unwrap().as_ref().unwrap();
@@ -318,7 +350,6 @@ impl LibraDemo {
                 bcs::from_bytes(&account_state_proof.blob.unwrap().into_bytes().unwrap()).unwrap();
             //println!("{:#?}", account_state_blob);
 
-
             let transaction_info_with_proof = TransactionInfoWithProof::new(
                 ledger_info_to_transaction_info_proof,
                 transaction_info
@@ -328,13 +359,13 @@ impl LibraDemo {
                 transaction_info_with_proof,
                 transaction_info_to_account_proof,
             );
-            account_transaction_state_proof.verify(
+            let _ = account_transaction_state_proof.verify(
                 self.latest_li.as_ref().unwrap().ledger_info(),
                 transaction.version,
                 self.account.as_ref().unwrap().address.hash(),
                 Some(&account_state_blob),
             );
-            println!("{:#?}", transaction.version);
+            println!("Transaction was verified");
         }
         Ok(())
     }
@@ -347,54 +378,23 @@ impl LibraDemo {
     }
 }
 
+async fn bridge(args: Args) {
+    let mut demo = DiemDemo::new(&args.diem_rpc_endpoint).unwrap();
 
-fn main() {
-    let mut input = String::new();
-    print!("diem-demo:");
+    // hard code 2 account address
+    let mut address: Vec<String> = Vec::new();
+    address.push("0xd4f0c053205ba934bb2ac0c4e8479e77".to_string());
+    address.push("0x57c76da2e144c0357336ace2f3f8ac9b".to_string());
 
-    //let mut demo = LibraDemo::new("https://testnet.diem.com/v1").unwrap();
-    let mut demo = LibraDemo::new("http://127.0.0.1:8080").unwrap();
-    let generate_account = String::from("generate account");
-    let generate_transaction = String::from("generate transaction");
-    let init_state = String::from("init state");
-    let init_account = String::from("init account");
-    let verify_transactions = String::from("verify transactions");
-    let config = Config::builder()
-        .history_ignore_space(true)
-        .completion_type(CompletionType::List)
-        .auto_add_history(true)
-        .build();
-    let mut rl = Editor::<()>::with_config(config);
-    loop {
-        let readline = rl.readline("diem% ");
-        match readline {
-            Ok(line) => {
-                if line.eq(&generate_account) {
-                    demo.generate_account();
-                } else if line.eq(&generate_transaction) {
-                    demo.generate_transaction();
-                } else if line.eq(&init_state) {
-                    demo.init_state();
-                } else if line.eq(&init_account) {
-                    demo.init_account();
-                } else if line.eq(&verify_transactions) {
-                    demo.verify_transactions();
-                } else {
-                    demo.unknown_cmd();
-                }
-            }
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                break;
-            }
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
-                break;
-            }
-            Err(err) => {
-                println!("Error: {:?}", err);
-                break;
-            }
-        };
+    let _ = demo.init_state();
+    for addr in address {
+        let _= demo.init_account(addr);
+        let _ = demo.verify_transactions();
     }
+}
+
+#[tokio::main]
+async fn main() {
+    let args = Args::from_args();
+    bridge(args).await;
 }
