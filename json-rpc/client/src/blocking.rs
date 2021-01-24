@@ -9,8 +9,8 @@ use reqwest::{
 };
 use std::time::Duration;
 
-const JSON_RPC_TIMEOUT_MS: u64 = 5_000;
-const MAX_JSON_RPC_RETRY_COUNT: u64 = 2;
+const JSON_RPC_TIMEOUT_MS: u64 = 20_000;
+const MAX_JSON_RPC_RETRY_COUNT: u64 = 3;
 
 pub struct JsonRpcClient {
     url: Url,
