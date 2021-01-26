@@ -44,7 +44,7 @@ use diem_json_rpc_client::{
     JsonRpcBatch, JsonRpcClient, ResponseAsView,
 };
 use std::{convert::TryFrom};
-use diem_json_rpc_types::views::AmountView;
+use diem_json_rpc_types::views::{AmountView, EventDataView};
 use diem_types::account_state_blob::AccountStateBlob;
 use std::ops::Add;
 
@@ -368,6 +368,7 @@ impl DiemDemo {
         pr: &PrClient,
         account_address: String,
     ) -> Result<(), Error> {
+        let mut state_initiated = false;
         // Init account information
         let mut batch = JsonRpcBatch::new();
         let address = AccountAddress::from_hex_literal(&account_address).unwrap();
@@ -405,7 +406,7 @@ impl DiemDemo {
 
                 if account_info.sequence_number > 0 {
                     // Init sent events
-                    let mut batch = JsonRpcBatch::new();
+                    /*let mut batch = JsonRpcBatch::new();
                     let sent_events_key = account_view.sent_events_key.0.clone();
                     batch.add_get_events_request(sent_events_key.to_string(), 0, account_view.sequence_number.clone());
                     let responses = self.rpc_client.execute(batch).unwrap();
@@ -416,7 +417,7 @@ impl DiemDemo {
                         Err(_) => {
                             println!("get sending events error");
                         }
-                    }
+                    }*/
 
                     // Init received events
                     let mut batch = JsonRpcBatch::new();
@@ -425,7 +426,40 @@ impl DiemDemo {
                     let responses = self.rpc_client.execute(batch).unwrap();
                     match get_response_from_batch(0, &responses).unwrap().as_ref() {
                         Ok(resp) => {
-                            self.received_events = Option::from(EventView::vec_from_response(resp.clone()).unwrap());
+                            let received_events = EventView::vec_from_response(resp.clone()).unwrap();
+                            let mut new_events: Vec<EventView> = Vec::new();
+                            for event in received_events.clone() {
+                                let exist = self.received_events.as_ref().is_some()
+                                    && self.received_events.as_ref().unwrap().iter().any(|x| x.transaction_version == event.transaction_version);
+                                if !exist {
+                                    println!("new received event!");
+                                    new_events.push(event);
+                                }
+                            }
+
+                            if new_events.len() > 0 && !state_initiated {
+                                let _ = self.init_state();
+                                state_initiated = true;
+                            }
+
+                            for event in new_events {
+                                let transaction = self.get_transaction_by_version(event.transaction_version).unwrap();
+                                println!("received transaction:{:?}", transaction);
+                                match self.get_transaction_proof(&transaction) {
+                                    Ok(transaction_with_proof) => {
+                                        println!("transaction_with_proof:{:?}", transaction_with_proof);
+
+                                        let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
+                                        let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::VerifyTransaction
+                                        { account_address: account_address.clone(), transaction_with_proof_b64 }).await?;
+                                    },
+                                    Err(_) => {
+                                        println!("get_transaction_proof error");
+                                    }
+                                }
+                            }
+
+                            self.received_events = Option::from(received_events);
                         },
                         Err(_) => {
                             println!("get receiving events error");
@@ -436,7 +470,7 @@ impl DiemDemo {
                 // Init transactions
                 let mut batch = JsonRpcBatch::new();
                 batch.add_get_account_transactions_request(self.account.as_ref().unwrap().address.clone(),
-                    0, self.account.as_ref().unwrap().sequence_number.clone(), true);
+                    0, self.account.as_ref().unwrap().sequence_number.clone(), false);
                 let responses = self.rpc_client.execute(batch).unwrap();
                 match get_response_from_batch(0, &responses).unwrap().as_ref() {
                     Ok(resp) => {
@@ -451,24 +485,23 @@ impl DiemDemo {
                             }
                         }
 
-                        if need_sync_transactions.len() > 0 {
+                        if need_sync_transactions.len() > 0 && !state_initiated {
                             let _ = self.init_state();
-                            for transaction in need_sync_transactions {
-                                match self.get_transaction_proof(&transaction) {
-                                    Ok(transaction_with_proof) => {
-                                        println!("transaction_with_proof:{:?}", transaction_with_proof);
+                        }
 
-                                        let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
-                                        let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::VerifyTransaction
-                                            { account_address: account_address.clone(), transaction_with_proof_b64 }).await?;
-                                    },
-                                    Err(_) => {
-                                        println!("get_transaction_proof error");
-                                    }
+                        for transaction in need_sync_transactions {
+                            match self.get_transaction_proof(&transaction) {
+                                Ok(transaction_with_proof) => {
+                                    println!("transaction_with_proof:{:?}", transaction_with_proof);
+
+                                    let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
+                                    let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::VerifyTransaction
+                                        { account_address: account_address.clone(), transaction_with_proof_b64 }).await?;
+                                },
+                                Err(_) => {
+                                    println!("get_transaction_proof error");
                                 }
                             }
-                        } else {
-                            println!("no new transactions");
                         }
 
                         self.transactions = Option::from(transactions);
@@ -554,6 +587,27 @@ impl DiemDemo {
             Err(_) => {
                 println!("Failed to get account's state with proof");
                 return Err(Error::FailedToGetResponse);
+            }
+        }
+    }
+
+    fn get_transaction_by_version(
+        &mut self,
+        version: u64
+    ) -> Result<TransactionView, Error> {
+        let mut batch = JsonRpcBatch::new();
+        batch.add_get_transactions_request(version, 1, false);
+        let responses = self.rpc_client.execute(batch).unwrap();
+        match get_response_from_batch(0, &responses).unwrap().as_ref() {
+            Ok(resp) => {
+                let transactions = TransactionView::vec_from_response(resp.clone()).unwrap();
+                if transactions.len() == 0 {
+                    return Err(Error::FailedToGetTransaction);
+                }
+                Ok(transactions[0].clone())
+            },
+            Err(_) => {
+                return Err(Error::FailedToGetTransaction);
             }
         }
     }

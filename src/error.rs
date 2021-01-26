@@ -6,7 +6,8 @@ pub enum Error {
   SerdeError(serde_json::error::Error),
   FailedToDecode,
   BadTransactionHash,
-  FailedToGetResponse
+  FailedToGetResponse,
+  FailedToGetTransaction,
 }
 
 impl From<hyper::error::Error> for Error {
