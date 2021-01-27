@@ -8,6 +8,8 @@ pub enum Error {
   BadTransactionHash,
   FailedToGetResponse,
   FailedToGetTransaction,
+  NoTransaction,
+  FailedToInitState,
 }
 
 impl From<hyper::error::Error> for Error {
