@@ -28,7 +28,7 @@ use diem_json_rpc_client::{
     get_response_from_batch,
     views::{
         AccountStateWithProofView, AccountView, BytesView,
-        EventView, StateProofView, TransactionView
+        EventView, StateProofView, TransactionView, TransactionDataView
     },
     JsonRpcBatch, JsonRpcClient, ResponseAsView, JsonRpcResponse,
 };
@@ -46,7 +46,7 @@ const DIEM_CONTRACT_ID: u32 = 5;
 const INTERVAL: u64 = 1_000 * 60 * 3;
 
 use crate::error::Error;
-use crate::types::QueryReqData;
+use crate::types::{QueryReqData, QueryRespData};
 
 use serde::{Serialize, Deserialize};
 
@@ -56,7 +56,7 @@ struct Args {
     #[structopt(
     default_value = "http://127.0.0.1:8080", long,
     help = "Diem rpc endpoint")]
-    diem_rpc_endpoint: String, //official rpc endpoint: https://testnet.diem.com/v1
+    diem_rpc_endpoint: String, //official rpc endpoint: https://testnet.diem.com
 
     #[structopt(
     default_value = "http://127.0.0.1:8000", long,
@@ -174,8 +174,9 @@ impl DiemBridge {
         Ok(())
     }
 
-    pub fn init_state(
-        &mut self
+    async fn init_state(
+        &mut self,
+        pr: Option<&PrClient>,
     ) -> Result<(), Error> {
         let mut batch = JsonRpcBatch::new();
         batch.add_get_state_proof_request(0);
@@ -200,6 +201,18 @@ impl DiemBridge {
             let _ = self.verify_state_proof(ledger_info_with_signatures, epoch_change_proof);
             println!("trusted_state: {:#?}", self.trusted_state);
             println!("ledger_info_with_signatures: {:#?}", self.latest_li);
+
+            if pr.is_some() {
+                let trusted_state_b64 = base64::encode(&bcs::to_bytes(&zero_ledger_info_with_sigs).unwrap());
+                let resp = pr.unwrap().query(DIEM_CONTRACT_ID, QueryReqData::SetTrustedState { trusted_state_b64 }).await?;
+                if let QueryRespData::SetTrustedState { status } = resp {
+                    if status == false {
+                        return Err(Error::FailedToInitState);
+                    }
+                } else {
+                    return Err(Error::FailedToInitState);
+                }
+            }
 
             Ok(())
         } else {
@@ -271,7 +284,7 @@ impl DiemBridge {
                     }
 
                     if new_events.len() > 0 && !state_initiated {
-                        if let Err(_) = self.init_state() {
+                        if let Err(_) = self.init_state(None).await {
                             return Err(Error::FailedToInitState);
                         }
 
@@ -313,12 +326,17 @@ impl DiemBridge {
                         && self.transactions.as_ref().unwrap().iter().any(|x| x.version == transaction.version);
                     if !exist {
                         println!("new transaction!");
-                        need_sync_transactions.push(transaction);
+                        match transaction.transaction {
+                            TransactionDataView::UserTransaction {..} => {
+                                need_sync_transactions.push(transaction);
+                            },
+                            _ => (),
+                        }
                     }
                 }
 
                 if need_sync_transactions.len() > 0 && !state_initiated {
-                    if let Err(_) = self.init_state() {
+                    if let Err(_) = self.init_state(None).await {
                         return Err(Error::FailedToInitState);
                     }
 
@@ -344,11 +362,6 @@ impl DiemBridge {
         } else {
             println!("get account view error");
         }
-
-        //println!("account: {:#?}", self.account);
-        //println!("sent_events: {:#?}", self.sent_events);
-        //println!("received_events: {:#?}", self.received_events);
-        //println!("transactions: {:#?}", self.transactions);
 
         Ok(())
     }
@@ -451,15 +464,17 @@ impl DiemBridge {
 }
 
 async fn bridge(args: Args) -> Result<(), Error> {
-    let mut demo = DiemBridge::new(&args.diem_rpc_endpoint).unwrap();
+    let mut diem = DiemBridge::new(&args.diem_rpc_endpoint).unwrap();
 
     let pr = PrClient::new(&args.pruntime_endpoint);
+
+    diem.init_state(Some(&pr)).await?;
 
     //hard code Alice account
     let addr: String = "0xd4f0c053205ba934bb2ac0c4e8479e77".to_string();
 
     loop {
-        let _= demo.init_account(&pr, addr.clone()).await;
+        let _= diem.init_account(&pr, addr.clone()).await;
 
         println!("Waiting for next loop");
         tokio::time::delay_for(std::time::Duration::from_millis(INTERVAL)).await;

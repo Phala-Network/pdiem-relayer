@@ -57,10 +57,12 @@ impl Resp for QueryReq {
 pub enum QueryReqData {
     AccountData { account_data_b64: String },
     VerifyTransaction { account_address: String, transaction_with_proof_b64: String },
+    SetTrustedState { trusted_state_b64: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum QueryRespData {
     AccountData { size: u32 },
     VerifyTransaction { total: u32, verified: bool },
+    SetTrustedState { status: bool },
 }
