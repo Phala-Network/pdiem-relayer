@@ -761,7 +761,7 @@ impl TransactionOutput {
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 pub struct TransactionInfo {
     /// The hash of this transaction.
-    pub transaction_hash: HashValue,
+    transaction_hash: HashValue,
 
     /// The root hash of Sparse Merkle Tree describing the world state at the end of this
     /// transaction.

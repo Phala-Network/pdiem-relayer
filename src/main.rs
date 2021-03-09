@@ -160,14 +160,14 @@ impl DiemBridge {
                         .expect("no validator set in epoch change ledger info"),
                 );
                 // Update client state
-                self.trusted_state = Option::from(new_state);
+                self.trusted_state = Some(new_state);
                 self.latest_epoch_change_li = Some(latest_epoch_change_li.clone());
             }
             TrustedStateChange::Version { new_state } => {
                 if self.trusted_state.as_mut().unwrap().latest_version() < new_state.latest_version() {
                     println!("Verified version change to: {}", new_state.latest_version());
                 }
-                self.trusted_state = Option::from(new_state);
+                self.trusted_state = Some(new_state);
             }
             TrustedStateChange::NoChange => (),
         }
@@ -192,10 +192,10 @@ impl DiemBridge {
             // Init zero version state
             let zero_ledger_info_with_sigs = epoch_change_proof.ledger_info_with_sigs[0].clone();
 
-            self.latest_epoch_change_li = Option::from(zero_ledger_info_with_sigs.clone());
-            self.trusted_state = Option::from(TrustedState::try_from(zero_ledger_info_with_sigs.ledger_info()).unwrap());
-            self.latest_li = Option::from(ledger_info_with_signatures.clone());
-            self.epoch_change_proof = Option::from(epoch_change_proof.clone());
+            self.latest_epoch_change_li = Some(zero_ledger_info_with_sigs.clone());
+            self.trusted_state = Some(TrustedState::try_from(zero_ledger_info_with_sigs.ledger_info()).unwrap());
+            self.latest_li = Some(ledger_info_with_signatures.clone());
+            self.epoch_change_proof = Some(epoch_change_proof.clone());
 
             // Update Latest version state
             let _ = self.verify_state_proof(ledger_info_with_signatures, epoch_change_proof);
@@ -221,7 +221,7 @@ impl DiemBridge {
         }
     }
 
-    async fn init_account(
+    async fn sync_account(
         &mut self,
         pr: &PrClient,
         account_address: String,
@@ -231,22 +231,19 @@ impl DiemBridge {
         let mut batch = JsonRpcBatch::new();
         let address = AccountAddress::from_hex_literal(&account_address).unwrap();
         batch.add_get_account_request(address);
-        let resp = self.request_rpc(batch);
-        if resp.is_err() {
-            return Err(Error::FailedToGetResponse);
-        }
+        let resp = self.request_rpc(batch).map_err(|_| Error::FailedToGetResponse)?;
 
-        if let Some(account_view) = AccountView::optional_from_response(resp.unwrap()).unwrap() {
-            self.account = Option::from(AccountData {
+        if let Some(account_view) = AccountView::optional_from_response(resp).unwrap() {
+            self.account = Some(AccountData {
                 address,
                 authentication_key: account_view.authentication_key.into_bytes().ok(),
                 key_pair: None,
                 sequence_number: account_view.sequence_number,
                 status: AccountStatus::Persisted,
             });
-            self.sent_events_key = Option::from(account_view.sent_events_key.clone());
-            self.received_events_key = Option::from(account_view.received_events_key.clone());
-            self.balances = Option::from(account_view.balances.clone());
+            self.sent_events_key = Some(account_view.sent_events_key.clone());
+            self.received_events_key = Some(account_view.received_events_key.clone());
+            self.balances = Some(account_view.balances.clone());
 
             let balances: Vec<Amount> = self.balances.as_ref().unwrap()
                 .iter()
@@ -265,102 +262,130 @@ impl DiemBridge {
             let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::AccountData { account_data_b64 }).await?;
 
             if account_info.sequence_number > 0 {
-                // Init sent events
-
-                // Init received events
-                let mut batch = JsonRpcBatch::new();
-                let received_events_key = account_view.received_events_key.0.clone();
-                batch.add_get_events_request(received_events_key.to_string(), 0, account_view.sequence_number.clone());
-                if let Ok(resp) = self.request_rpc(batch) {
-                    let received_events = EventView::vec_from_response(resp.clone()).unwrap();
-                    let mut new_events: Vec<EventView> = Vec::new();
-                    for event in received_events.clone() {
-                        let exist = self.received_events.as_ref().is_some()
-                            && self.received_events.as_ref().unwrap().iter().any(|x| x.transaction_version == event.transaction_version);
-                        if !exist {
-                            println!("new received event!");
-                            new_events.push(event);
-                        }
-                    }
-
-                    if new_events.len() > 0 && !state_initiated {
-                        if let Err(_) = self.init_state(None).await {
-                            return Err(Error::FailedToInitState);
-                        }
-
-                        state_initiated = true;
-                    }
-
-                    for event in new_events {
-                        if let Ok(transaction) = self.get_transaction_by_version(event.transaction_version) {
-                            println!("received transaction:{:?}", transaction);
-                            if let Ok(transaction_with_proof) = self.get_transaction_proof(&transaction) {
-                                println!("transaction_with_proof:{:?}", transaction_with_proof);
-
-                                let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
-                                let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::VerifyTransaction
-                                    { account_address: account_address.clone(), transaction_with_proof_b64 }).await?;
-                            } else {
-                                println!("get_transaction_proof error");
-                            }
-                        } else {
-                            println!("get_transaction_by_version error");
-                        }
-                    }
-
-                    self.received_events = Option::from(received_events);
-                } else {
-                    println!("get receiving events error");
-                }
+                // Sync receiving transactions
+                let _ = self.sync_receiving_transactions(
+                    &pr,
+                    account_view.received_events_key.0.clone().to_string(),
+                    account_view.sequence_number.clone(),
+                    account_address.clone(), state_initiated)
+                    .await?;
             }
 
-            // Init transactions
-            let mut batch = JsonRpcBatch::new();
-            batch.add_get_account_transactions_request(self.account.as_ref().unwrap().address.clone(),
-                0, self.account.as_ref().unwrap().sequence_number.clone(), false);
-            if let Ok(resp) = self.request_rpc(batch) {
-                let mut need_sync_transactions: Vec<TransactionView> = Vec::new();
-                let transactions = TransactionView::vec_from_response(resp.clone()).unwrap();
-                for transaction in transactions.clone() {
-                    let exist = self.transactions.as_ref().is_some()
-                        && self.transactions.as_ref().unwrap().iter().any(|x| x.version == transaction.version);
-                    if !exist {
-                        println!("new transaction!");
-                        match transaction.transaction {
-                            TransactionDataView::UserTransaction {..} => {
-                                need_sync_transactions.push(transaction);
-                            },
-                            _ => (),
-                        }
-                    }
-                }
-
-                if need_sync_transactions.len() > 0 && !state_initiated {
-                    if let Err(_) = self.init_state(None).await {
-                        return Err(Error::FailedToInitState);
-                    }
-
-                    state_initiated = true;
-                }
-
-                for transaction in need_sync_transactions {
-                    if let Ok(transaction_with_proof) = self.get_transaction_proof(&transaction) {
-                        println!("transaction_with_proof:{:?}", transaction_with_proof);
-
-                        let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
-                        let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::VerifyTransaction
-                            { account_address: account_address.clone(), transaction_with_proof_b64 }).await?;
-                    } else {
-                        println!("get_transaction_proof error");
-                    }
-                }
-
-                self.transactions = Option::from(transactions);
-            } else {
-                println!("get account's transactions error");
-            }
+            // Sync sending transactions
+            let _ = self.sync_sent_transactions(&pr, account_address, state_initiated).await?;
         } else {
             println!("get account view error");
+        }
+
+        Ok(())
+    }
+
+    async fn sync_receiving_transactions(
+        &mut self,
+        pr: &PrClient,
+        received_events_key: String,
+        sequence_number: u64,
+        account_address: String,
+        mut state_initiated: bool,
+    ) -> Result<(), Error> {
+        let mut batch = JsonRpcBatch::new();
+        batch.add_get_events_request(received_events_key.to_string(), 0, sequence_number);
+        let resp = self.request_rpc(batch).map_err(|_| Error::FailedToGetReceivingTransactions)?;
+
+        let received_events = EventView::vec_from_response(resp).unwrap();
+        let mut new_events: Vec<EventView> = Vec::new();
+        for event in received_events.clone() {
+            let exist = self.received_events.as_ref().is_some()
+                && self.received_events.as_ref().unwrap().iter().any(|x| x.transaction_version == event.transaction_version);
+            if !exist {
+                println!("new received event!");
+                new_events.push(event);
+            }
+        }
+
+        if new_events.len() > 0 && !state_initiated {
+            if let Err(_) = self.init_state(None).await {
+                return Err(Error::FailedToInitState);
+            }
+
+            state_initiated = true;
+        }
+
+        for event in new_events {
+            if let Ok(transaction) = self.get_transaction_by_version(event.transaction_version) {
+                println!("received transaction:{:?}", transaction);
+                let _ = self.sync_transaction_with_proof(&transaction, &pr, account_address.clone()).await?;
+            } else {
+                println!("get_transaction_by_version error");
+            }
+        }
+
+        self.received_events = Some(received_events);
+
+        Ok(())
+    }
+
+    async fn sync_sent_transactions(
+        &mut self,
+        pr: &PrClient,
+        account_address: String,
+        mut state_initiated: bool,
+    ) -> Result<(), Error> {
+        let mut batch = JsonRpcBatch::new();
+        batch.add_get_account_transactions_request(
+            self.account.as_ref().unwrap().address.clone(),
+            0,
+            self.account.as_ref().unwrap().sequence_number.clone(),
+            false
+        );
+        let resp = self.request_rpc(batch).map_err(|_| Error::FailedToGetSentTransactions)?;
+        let mut need_sync_transactions: Vec<TransactionView> = Vec::new();
+        let transactions = TransactionView::vec_from_response(resp).unwrap();
+        for transaction in transactions.clone() {
+            let exist = self.transactions.as_ref().is_some()
+                && self.transactions.as_ref().unwrap().iter().any(|x| x.version == transaction.version);
+            if !exist {
+                println!("new transaction!");
+                match transaction.transaction {
+                    TransactionDataView::UserTransaction {..} => {
+                        need_sync_transactions.push(transaction);
+                    },
+                    _ => (),
+                }
+            }
+        }
+
+        if need_sync_transactions.len() > 0 && !state_initiated {
+            if let Err(_) = self.init_state(None).await {
+                return Err(Error::FailedToInitState);
+            }
+
+            state_initiated = true;
+        }
+
+        for transaction in need_sync_transactions {
+            let _ = self.sync_transaction_with_proof(&transaction, &pr, account_address.clone()).await?;
+        }
+
+        self.transactions = Some(transactions);
+
+        Ok(())
+    }
+
+    async fn sync_transaction_with_proof(
+        &mut self,
+        transaction: &TransactionView,
+        pr: &PrClient,
+        account_address: String,
+    ) -> Result<(), Error> {
+        if let Ok(transaction_with_proof) = self.get_transaction_proof(&transaction) {
+            println!("transaction_with_proof:{:?}", transaction_with_proof);
+
+            let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
+            let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::VerifyTransaction
+            { account_address, transaction_with_proof_b64 }).await?;
+        } else {
+            println!("get_transaction_proof error");
         }
 
         Ok(())
@@ -388,8 +413,7 @@ impl DiemBridge {
                 bcs::from_bytes(&account_state_proof.proof.transaction_info_to_account_proof.into_bytes().unwrap()).unwrap();
             let account_state_blob: AccountStateBlob =
                 bcs::from_bytes(&account_state_proof.blob.unwrap().into_bytes().unwrap()).unwrap();
-            //println!("hash: {:}", transaction_info.transaction_hash.to_hex());
-            if transaction_info.transaction_hash.to_hex() != transaction.hash {
+            if transaction_info.transaction_hash().to_hex() != transaction.hash {
                 println!("Bad transaction hash");
                 return Err(Error::BadTransactionHash);
             }
@@ -474,7 +498,7 @@ async fn bridge(args: Args) -> Result<(), Error> {
     let addr: String = "0xd4f0c053205ba934bb2ac0c4e8479e77".to_string();
 
     loop {
-        let _= diem.init_account(&pr, addr.clone()).await;
+        let _= diem.sync_account(&pr, addr.clone()).await;
 
         println!("Waiting for next loop");
         tokio::time::delay_for(std::time::Duration::from_millis(INTERVAL)).await;

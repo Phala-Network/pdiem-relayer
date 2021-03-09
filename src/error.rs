@@ -10,6 +10,8 @@ pub enum Error {
   FailedToGetTransaction,
   NoTransaction,
   FailedToInitState,
+  FailedToGetReceivingTransactions,
+  FailedToGetSentTransactions,
 }
 
 impl From<hyper::error::Error> for Error {
