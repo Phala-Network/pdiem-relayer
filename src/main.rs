@@ -197,11 +197,6 @@ impl DiemBridge {
             self.latest_li = Some(ledger_info_with_signatures.clone());
             self.epoch_change_proof = Some(epoch_change_proof.clone());
 
-            // Update Latest version state
-            let _ = self.verify_state_proof(ledger_info_with_signatures, epoch_change_proof);
-            println!("trusted_state: {:#?}", self.trusted_state);
-            println!("ledger_info_with_signatures: {:#?}", self.latest_li);
-
             if pr.is_some() {
                 let trusted_state_b64 = base64::encode(&bcs::to_bytes(&zero_ledger_info_with_sigs).unwrap());
                 let resp = pr.unwrap().query(DIEM_CONTRACT_ID, QueryReqData::SetTrustedState { trusted_state_b64 }).await?;
