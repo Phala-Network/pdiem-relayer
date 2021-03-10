@@ -1,5 +1,9 @@
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 
+// Node Runtime
+use crate::runtimes::PhalaNodeRuntime;
+pub type Runtime = PhalaNodeRuntime;
+
 // pRuntime APIs
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Nonce {
@@ -54,15 +58,18 @@ impl Resp for QueryReq {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum QueryReqData {
+pub enum CommandReqData {
     AccountData { account_data_b64: String },
     VerifyTransaction { account_address: String, transaction_with_proof_b64: String },
     SetTrustedState { trusted_state_b64: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub enum QueryReqData {
+
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum QueryRespData {
-    AccountData { size: u32 },
-    VerifyTransaction { total: u32, verified: bool },
-    SetTrustedState { status: bool },
+
 }
