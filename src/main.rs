@@ -230,7 +230,7 @@ impl DiemBridge {
                 let trusted_state_b64 = base64::encode(&bcs::to_bytes(&zero_ledger_info_with_sigs).unwrap());
 
                 let command_value = serde_json::to_value(&CommandReqData::SetTrustedState { trusted_state_b64 })?;
-                let _ = self.push_command(command_value.to_string(), &client, signer);
+                let _ = self.push_command(command_value.to_string(), &client, signer).await;
             }
 
             Ok(())
@@ -281,7 +281,7 @@ impl DiemBridge {
 
             let account_data_b64 = base64::encode(&bcs::to_bytes(&account_info).unwrap());
             let command_value = serde_json::to_value(&CommandReqData::AccountData { account_data_b64 })?;
-            let _ = self.push_command(command_value.to_string(), &client, signer);
+            let _ = self.push_command(command_value.to_string(), &client, signer).await;
 
             if account_info.sequence_number > 0 {
                 // Sync receiving transactions
@@ -420,7 +420,7 @@ impl DiemBridge {
 
             let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
             let command_value = serde_json::to_value(&CommandReqData::VerifyTransaction { account_address, transaction_with_proof_b64 })?;
-            let _ = self.push_command(command_value.to_string(), &client, signer);
+            let _ = self.push_command(command_value.to_string(), &client, signer).await;
         } else {
             println!("get_transaction_proof error");
         }
