@@ -39,6 +39,16 @@ use diem_types::account_state_blob::AccountStateBlob;
 mod pruntime_client;
 mod types;
 mod error;
+mod runtimes;
+
+use std::cmp;
+use crate::types::{Runtime, Payload};
+use subxt::Signer;
+use subxt::system::AccountStoreExt;
+use core::marker::PhantomData;
+use sp_core::{sr25519, crypto::Pair};
+type SrSigner = subxt::PairSigner<Runtime, sr25519::Pair>;
+type XtClient = subxt::Client<Runtime>;
 
 type PrClient = pruntime_client::PRuntimeClient;
 
@@ -46,7 +56,7 @@ const DIEM_CONTRACT_ID: u32 = 5;
 const INTERVAL: u64 = 1_000 * 60 * 3;
 
 use crate::error::Error;
-use crate::types::{QueryReqData, QueryRespData};
+use crate::types::{CommandReqData};
 
 use serde::{Serialize, Deserialize};
 
@@ -62,6 +72,18 @@ struct Args {
     default_value = "http://127.0.0.1:8000", long,
     help = "pRuntime http endpoint")]
     pruntime_endpoint: String,
+
+    #[structopt(
+    required = true,
+    default_value = "//Alice",
+    short = "m", long = "mnemonic",
+    help = "Controller SR25519 private key mnemonic, private key seed, or derive path")]
+    mnemonic: String,
+
+    #[structopt(
+    default_value = "ws://localhost:9944", long,
+    help = "Substrate rpc websocket endpoint")]
+    substrate_ws_endpoint: String,
 }
 
 pub struct DiemBridge {
@@ -177,6 +199,8 @@ impl DiemBridge {
     async fn init_state(
         &mut self,
         pr: Option<&PrClient>,
+        client: &XtClient,
+        signer: &mut SrSigner
     ) -> Result<(), Error> {
         let mut batch = JsonRpcBatch::new();
         batch.add_get_state_proof_request(0);
@@ -197,16 +221,16 @@ impl DiemBridge {
             self.latest_li = Some(ledger_info_with_signatures.clone());
             self.epoch_change_proof = Some(epoch_change_proof.clone());
 
+            // Update Latest version state
+            let _ = self.verify_state_proof(ledger_info_with_signatures, epoch_change_proof);
+            println!("trusted_state: {:#?}", self.trusted_state);
+            println!("ledger_info_with_signatures: {:#?}", self.latest_li);
+
             if pr.is_some() {
                 let trusted_state_b64 = base64::encode(&bcs::to_bytes(&zero_ledger_info_with_sigs).unwrap());
-                let resp = pr.unwrap().query(DIEM_CONTRACT_ID, QueryReqData::SetTrustedState { trusted_state_b64 }).await?;
-                if let QueryRespData::SetTrustedState { status } = resp {
-                    if status == false {
-                        return Err(Error::FailedToInitState);
-                    }
-                } else {
-                    return Err(Error::FailedToInitState);
-                }
+
+                let command_value = serde_json::to_value(&CommandReqData::SetTrustedState { trusted_state_b64 })?;
+                let _ = self.push_command(command_value.to_string(), &client, signer).await;
             }
 
             Ok(())
@@ -220,6 +244,8 @@ impl DiemBridge {
         &mut self,
         pr: &PrClient,
         account_address: String,
+        client: &XtClient,
+        signer: &mut SrSigner,
     ) -> Result<(), Error> {
         let mut state_initiated = false;
         // Init account information
@@ -254,7 +280,8 @@ impl DiemBridge {
             };
 
             let account_data_b64 = base64::encode(&bcs::to_bytes(&account_info).unwrap());
-            let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::AccountData { account_data_b64 }).await?;
+            let command_value = serde_json::to_value(&CommandReqData::AccountData { account_data_b64 })?;
+            let _ = self.push_command(command_value.to_string(), &client, signer).await;
 
             if account_info.sequence_number > 0 {
                 // Sync receiving transactions
@@ -262,12 +289,15 @@ impl DiemBridge {
                     &pr,
                     account_view.received_events_key.0.clone().to_string(),
                     account_view.sequence_number.clone(),
-                    account_address.clone(), state_initiated)
-                    .await?;
+                    account_address.clone(),
+                    &mut state_initiated,
+                    &client,
+                    signer,
+                ).await?;
             }
 
             // Sync sending transactions
-            let _ = self.sync_sent_transactions(&pr, account_address, state_initiated).await?;
+            let _ = self.sync_sent_transactions(&pr, account_address, &mut state_initiated, &client, signer).await?;
         } else {
             println!("get account view error");
         }
@@ -281,7 +311,9 @@ impl DiemBridge {
         received_events_key: String,
         sequence_number: u64,
         account_address: String,
-        mut state_initiated: bool,
+        state_initiated: &mut bool,
+        client: &XtClient,
+        signer: &mut SrSigner,
     ) -> Result<(), Error> {
         let mut batch = JsonRpcBatch::new();
         batch.add_get_events_request(received_events_key.to_string(), 0, sequence_number);
@@ -298,18 +330,21 @@ impl DiemBridge {
             }
         }
 
-        if new_events.len() > 0 && !state_initiated {
-            if let Err(_) = self.init_state(None).await {
+        if new_events.len() > 0 && *state_initiated == false {
+            if let Err(_) = self.init_state(None, &client, signer).await {
                 return Err(Error::FailedToInitState);
             }
 
-            state_initiated = true;
+            *state_initiated = true;
         }
 
         for event in new_events {
             if let Ok(transaction) = self.get_transaction_by_version(event.transaction_version) {
                 println!("received transaction:{:?}", transaction);
-                let _ = self.sync_transaction_with_proof(&transaction, &pr, account_address.clone()).await?;
+                let _ = self.sync_transaction_with_proof(
+                    &transaction, &pr,
+                    account_address.clone(), &client, signer
+                ).await?;
             } else {
                 println!("get_transaction_by_version error");
             }
@@ -324,7 +359,9 @@ impl DiemBridge {
         &mut self,
         pr: &PrClient,
         account_address: String,
-        mut state_initiated: bool,
+        state_initiated: &mut bool,
+        client: &XtClient,
+        signer: &mut SrSigner,
     ) -> Result<(), Error> {
         let mut batch = JsonRpcBatch::new();
         batch.add_get_account_transactions_request(
@@ -350,16 +387,19 @@ impl DiemBridge {
             }
         }
 
-        if need_sync_transactions.len() > 0 && !state_initiated {
-            if let Err(_) = self.init_state(None).await {
+        if need_sync_transactions.len() > 0 && *state_initiated == false {
+            if let Err(_) = self.init_state(None, &client, signer).await {
                 return Err(Error::FailedToInitState);
             }
 
-            state_initiated = true;
+            *state_initiated = true;
         }
 
         for transaction in need_sync_transactions {
-            let _ = self.sync_transaction_with_proof(&transaction, &pr, account_address.clone()).await?;
+            let _ = self.sync_transaction_with_proof(
+                &transaction, &pr,
+                account_address.clone(), &client, signer
+            ).await?;
         }
 
         self.transactions = Some(transactions);
@@ -372,17 +412,52 @@ impl DiemBridge {
         transaction: &TransactionView,
         pr: &PrClient,
         account_address: String,
+        client: &XtClient,
+        signer: &mut SrSigner,
     ) -> Result<(), Error> {
         if let Ok(transaction_with_proof) = self.get_transaction_proof(&transaction) {
             println!("transaction_with_proof:{:?}", transaction_with_proof);
 
             let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
-            let _resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::VerifyTransaction
-            { account_address, transaction_with_proof_b64 }).await?;
+            let command_value = serde_json::to_value(&CommandReqData::VerifyTransaction { account_address, transaction_with_proof_b64 })?;
+            let _ = self.push_command(command_value.to_string(), &client, signer).await;
         } else {
             println!("get_transaction_proof error");
         }
 
+        Ok(())
+    }
+
+    async fn push_command(
+        &mut self,
+        payload: String,
+        client: &XtClient,
+        signer: &mut SrSigner,
+    ) -> Result<(), Error> {
+        let command_payload = serde_json::to_string(&Payload::Plain(payload))?;
+        println!("command_payload:{}", command_payload);
+        let call = runtimes::phala::PushCommandCall {
+            _runtime: PhantomData,
+            contract_id: DIEM_CONTRACT_ID,
+            payload: command_payload.as_bytes().to_vec(),
+        };
+
+        self.update_signer_nonce(client, signer).await?;
+        let ret = client.submit(call, signer).await;
+        if !ret.is_ok() {
+            println!("FailedToCallPushCommand: {:?}", ret);
+            return Err(Error::FailedToCallPushCommand);
+        }
+        signer.increment_nonce();
+
+        Ok(())
+    }
+
+    async fn update_signer_nonce(&self, client: &XtClient, signer: &mut SrSigner) -> Result<(), Error> {
+        let account_id = signer.account_id();
+        let nonce = client.account(account_id, None).await?.nonce;
+        let local_nonce = signer.nonce();
+        signer.set_nonce(cmp::max(nonce, local_nonce.unwrap_or(0)));
         Ok(())
     }
 
@@ -484,16 +559,25 @@ impl DiemBridge {
 
 async fn bridge(args: Args) -> Result<(), Error> {
     let mut diem = DiemBridge::new(&args.diem_rpc_endpoint).unwrap();
+    let client = subxt::ClientBuilder::<Runtime>::new()
+        .skip_type_sizes_check()
+        .set_url(args.substrate_ws_endpoint.clone())
+        .build().await?;
+    println!("Connected to substrate at: {}", args.substrate_ws_endpoint.clone());
+
+    let pair = <sr25519::Pair as Pair>::from_string(&args.mnemonic, None)
+        .expect("Bad privkey derive path");
+    let mut signer: SrSigner = subxt::PairSigner::new(pair);
 
     let pr = PrClient::new(&args.pruntime_endpoint);
 
-    diem.init_state(Some(&pr)).await?;
+    diem.init_state(Some(&pr), &client, &mut signer).await?;
 
     //hard code Alice account
     let addr: String = "0xd4f0c053205ba934bb2ac0c4e8479e77".to_string();
 
     loop {
-        let _= diem.sync_account(&pr, addr.clone()).await;
+        let _= diem.sync_account(&pr, addr.clone(), &client, &mut signer).await;
 
         println!("Waiting for next loop");
         tokio::time::delay_for(std::time::Duration::from_millis(INTERVAL)).await;
