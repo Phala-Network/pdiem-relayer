@@ -32,6 +32,6 @@ base64 = "0.11"
 
 # substrate
 codec = { package = 'parity-scale-codec', version = "2.0.0" }
-subxt = { path = "./subxt", package = "substrate-subxt" }
-sp-core = { version = "3.0.0", path = "./substrate/primitives/core" }
-sp-runtime = { version = "3.0.0", path = "./substrate/primitives/runtime", package = "sp-runtime" }
+subxt = { git = "https://github.com/paritytech/substrate-subxt.git", package = "substrate-subxt" }
+sp-core = { version = "3.0.0", package = "sp-core" }  # Keep consistent with subxt
+sp-runtime = { version = "3.0.0", package = "sp-runtime" }  # Keep consistent with subxt
