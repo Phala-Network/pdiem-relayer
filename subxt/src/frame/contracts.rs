@@ -1,4 +1,4 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright 2019-2021 Parity Technologies (UK) Ltd.
 // This file is part of substrate-subxt.
 //
 // subxt is free software: you can redistribute it and/or modify
@@ -17,14 +17,8 @@
 //! Implements support for the pallet_contracts module.
 
 use crate::frame::{
-    balances::{
-        Balances,
-        BalancesEventsDecoder,
-    },
-    system::{
-        System,
-        SystemEventsDecoder,
-    },
+    balances::Balances,
+    system::System,
 };
 use codec::{
     Decode,
@@ -66,7 +60,7 @@ pub struct PutCodeCall<'a, T: Contracts> {
 /// - The contract is initialized.
 #[derive(Clone, Debug, Eq, PartialEq, Call, Encode)]
 pub struct InstantiateCall<'a, T: Contracts> {
-    /// Initial balance transfered to the contract.
+    /// Initial balance transferred to the contract.
     #[codec(compact)]
     pub endowment: <T as Balances>::Balance,
     /// Gas limit.
@@ -194,7 +188,7 @@ mod tests {
             // fund the account
             let endowment = 200_000_000_000_000;
             let _ = client
-                .transfer_and_watch(stash, &new_account_id, endowment)
+                .transfer_and_watch(stash, &new_account_id.into(), endowment)
                 .await
                 .expect("New account balance transfer failed");
             stash.increment_nonce();
@@ -297,8 +291,11 @@ mod tests {
         let ctx = TestContext::init().await;
         let code_stored = ctx.put_code().await.unwrap();
 
-        let instantiated = ctx.instantiate(&code_stored.code_hash, &[]).await.unwrap();
-        let executed = ctx.call(&instantiated.contract, &[]).await;
+        let instantiated = ctx
+            .instantiate(&code_stored.code_hash.into(), &[])
+            .await
+            .unwrap();
+        let executed = ctx.call(&instantiated.contract.into(), &[]).await;
 
         assert!(
             executed.is_ok(),

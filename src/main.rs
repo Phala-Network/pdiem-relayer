@@ -560,6 +560,7 @@ impl DiemBridge {
 async fn bridge(args: Args) -> Result<(), Error> {
     let mut diem = DiemBridge::new(&args.diem_rpc_endpoint).unwrap();
     let client = subxt::ClientBuilder::<Runtime>::new()
+        .skip_type_sizes_check()
         .set_url(args.substrate_ws_endpoint.clone())
         .build().await?;
     println!("Connected to substrate at: {}", args.substrate_ws_endpoint.clone());

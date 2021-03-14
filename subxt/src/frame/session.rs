@@ -1,4 +1,4 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright 2019-2021 Parity Technologies (UK) Ltd.
 // This file is part of substrate-subxt.
 //
 // subxt is free software: you can redistribute it and/or modify
@@ -16,14 +16,8 @@
 
 //! Session support
 use crate::frame::{
-    balances::{
-        Balances,
-        BalancesEventsDecoder as _,
-    },
-    system::{
-        System,
-        SystemEventsDecoder as _,
-    },
+    balances::Balances,
+    system::System,
 };
 use codec::Encode;
 use frame_support::Parameter;
@@ -51,9 +45,15 @@ macro_rules! default_impl {
     };
 }
 
+type IdentificationTuple<T> = (
+    <T as Session>::ValidatorId,
+    pallet_staking::Exposure<<T as System>::AccountId, <T as Balances>::Balance>,
+);
+
 /// The trait needed for this module.
 #[module]
 pub trait Session: System + Balances {
+    #![event_alias(IdentificationTuple = IdentificationTuple<T>)]
     #![event_alias(OpaqueTimeSlot = Vec<u8>)]
     #![event_alias(SessionIndex = u32)]
 
