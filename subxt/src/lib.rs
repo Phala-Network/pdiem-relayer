@@ -1,4 +1,4 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright 2019-2021 Parity Technologies (UK) Ltd.
 // This file is part of substrate-subxt.
 //
 // subxt is free software: you can redistribute it and/or modify
@@ -18,40 +18,48 @@
 //! [substrate](https://github.com/paritytech/substrate) node via RPC.
 
 #![deny(
-    bad_style,
-    const_err,
-    improper_ctypes,
-    missing_docs,
-    non_shorthand_field_patterns,
-    no_mangle_generic_items,
-    overflowing_literals,
-    path_statements,
-    patterns_in_fns_without_body,
-    private_in_public,
-    unconditional_recursion,
-    unused_allocation,
-    unused_comparisons,
-    unused_parens,
-    while_true,
-    trivial_casts,
-    trivial_numeric_casts,
-    unused_extern_crates,
-    clippy::all
+bad_style,
+const_err,
+improper_ctypes,
+missing_docs,
+non_shorthand_field_patterns,
+no_mangle_generic_items,
+overflowing_literals,
+path_statements,
+patterns_in_fns_without_body,
+private_in_public,
+unconditional_recursion,
+unused_allocation,
+unused_comparisons,
+unused_parens,
+while_true,
+trivial_casts,
+trivial_numeric_casts,
+unused_extern_crates,
+clippy::all
 )]
 #![allow(clippy::type_complexity)]
 
 #[macro_use]
 extern crate substrate_subxt_proc_macro;
 
-#[cfg(feature = "client")]
-pub use substrate_subxt_client as client;
-
 pub use sp_core;
 pub use sp_runtime;
 
-use codec::Decode;
+use codec::{
+    Codec,
+    Decode,
+};
 use futures::future;
-use jsonrpsee::client::Subscription;
+use jsonrpsee_http_client::{
+    HttpClient,
+    HttpConfig,
+};
+use jsonrpsee_ws_client::{
+    WsClient,
+    WsConfig,
+    WsSubscription as Subscription,
+};
 use sp_core::{
     storage::{
         StorageChangeSet,
@@ -62,7 +70,10 @@ use sp_core::{
 };
 pub use sp_runtime::traits::SignedExtension;
 pub use sp_version::RuntimeVersion;
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    sync::Arc,
+};
 
 mod error;
 mod events;
@@ -76,6 +87,7 @@ mod subscription;
 pub use crate::{
     error::Error,
     events::{
+        EventTypeRegistry,
         EventsDecoder,
         RawEvent,
         Raw as RawEventWrapper,
@@ -95,10 +107,15 @@ pub use crate::{
         BlockNumber,
         ExtrinsicSuccess,
         ReadProof,
+        RpcClient,
         SystemProperties,
     },
     runtimes::*,
-    subscription::*,
+    subscription::{
+        EventStorageSubscription,
+        EventSubscription,
+        FinalizedEventStorageSubscription,
+    },
     substrate_subxt_proc_macro::*,
 };
 use crate::{
@@ -116,25 +133,29 @@ use crate::{
 /// ClientBuilder for constructing a Client.
 #[derive(Default)]
 pub struct ClientBuilder<T: Runtime> {
-    _marker: std::marker::PhantomData<T>,
     url: Option<String>,
-    client: Option<jsonrpsee::Client>,
+    client: Option<RpcClient>,
     page_size: Option<u32>,
+    event_type_registry: EventTypeRegistry<T>,
+    skip_type_sizes_check: bool,
+    accept_weak_inclusion: bool,
 }
 
 impl<T: Runtime> ClientBuilder<T> {
     /// Creates a new ClientBuilder.
     pub fn new() -> Self {
         Self {
-            _marker: std::marker::PhantomData,
             url: None,
             client: None,
             page_size: None,
+            event_type_registry: EventTypeRegistry::new(),
+            skip_type_sizes_check: false,
+            accept_weak_inclusion: false,
         }
     }
 
     /// Sets the jsonrpsee client.
-    pub fn set_client<P: Into<jsonrpsee::Client>>(mut self, client: P) -> Self {
+    pub fn set_client<C: Into<RpcClient>>(mut self, client: C) -> Self {
         self.client = Some(client.into());
         self
     }
@@ -151,30 +172,87 @@ impl<T: Runtime> ClientBuilder<T> {
         self
     }
 
+    /// Register a custom type segmenter, for consuming types in events where the size cannot
+    /// be inferred from the metadata.
+    ///
+    /// # Panics
+    ///
+    /// If there is already a type size registered with this name.
+    pub fn register_type_size<U>(mut self, name: &str) -> Self
+        where
+            U: Codec + Send + Sync + 'static,
+    {
+        self.event_type_registry.register_type_size::<U>(name);
+        self
+    }
+
+    /// Disable the check for missing type sizes on `build`.
+    ///
+    /// *WARNING* can lead to runtime errors if receiving events with unknown types.
+    pub fn skip_type_sizes_check(mut self) -> Self {
+        self.skip_type_sizes_check = true;
+        self
+    }
+
+    /// Only check that transactions are InBlock on submit.
+    pub fn accept_weak_inclusion(mut self) -> Self {
+        self.accept_weak_inclusion = true;
+        self
+    }
+
     /// Creates a new Client.
-    pub async fn build(self) -> Result<Client<T>, Error> {
+    pub async fn build<'a>(self) -> Result<Client<T>, Error> {
         let client = if let Some(client) = self.client {
             client
         } else {
             let url = self.url.as_deref().unwrap_or("ws://127.0.0.1:9944");
             if url.starts_with("ws://") || url.starts_with("wss://") {
-                jsonrpsee::ws_client(url).await?
+                let mut config = WsConfig::with_url(&url);
+                config.max_notifs_per_subscription = 4096;
+                RpcClient::WebSocket(WsClient::new(config).await?)
             } else {
-                jsonrpsee::http_client(url)
+                let client = HttpClient::new(url, HttpConfig::default())?;
+                RpcClient::Http(Arc::new(client))
             }
         };
-        let rpc = Rpc::new(client);
+        let mut rpc = Rpc::new(client);
+        if self.accept_weak_inclusion {
+            rpc.accept_weak_inclusion();
+        }
         let (metadata, genesis_hash, runtime_version, properties) = future::join4(
             rpc.metadata(),
             rpc.genesis_hash(),
             rpc.runtime_version(None),
             rpc.system_properties(),
         )
-        .await;
+            .await;
+        let metadata = metadata?;
+
+        if let Err(missing) = self.event_type_registry.check_missing_type_sizes(&metadata)
+        {
+            if self.skip_type_sizes_check {
+                log::warn!(
+                    "The following types do not have registered type segmenters: {:?} \
+                    If any events containing these types are received, this can cause a \
+                    `TypeSizeUnavailable` error and prevent decoding the actual event \
+                    being listened for.\
+                    \
+                    Use `ClientBuilder::register_type_size` to register missing type sizes.",
+                    missing
+                );
+            } else {
+                return Err(Error::MissingTypeSizes(missing.into_iter().collect()))
+            }
+        }
+
+        let events_decoder =
+            EventsDecoder::new(metadata.clone(), self.event_type_registry);
+
         Ok(Client {
             rpc,
             genesis_hash: genesis_hash?,
-            metadata: metadata?,
+            metadata,
+            events_decoder,
             properties: properties.unwrap_or_else(|_| Default::default()),
             runtime_version: runtime_version?,
             _marker: PhantomData,
@@ -183,12 +261,13 @@ impl<T: Runtime> ClientBuilder<T> {
     }
 }
 
-#[allow(missing_docs)]
 /// Client to interface with a substrate node.
 pub struct Client<T: Runtime> {
+    /// RPC
     pub rpc: Rpc<T>,
     genesis_hash: T::Hash,
     metadata: Metadata,
+    events_decoder: EventsDecoder<T>,
     properties: SystemProperties,
     runtime_version: RuntimeVersion,
     _marker: PhantomData<(fn() -> T::Signature, T::Extra)>,
@@ -201,6 +280,7 @@ impl<T: Runtime> Clone for Client<T> {
             rpc: self.rpc.clone(),
             genesis_hash: self.genesis_hash,
             metadata: self.metadata.clone(),
+            events_decoder: self.events_decoder.clone(),
             properties: self.properties.clone(),
             runtime_version: self.runtime_version.clone(),
             _marker: PhantomData,
@@ -358,8 +438,8 @@ impl<T: Runtime> Client<T> {
 
     /// Get a header
     pub async fn header<H>(&self, hash: Option<H>) -> Result<Option<T::Header>, Error>
-    where
-        H: Into<T::Hash> + 'static,
+        where
+            H: Into<T::Hash> + 'static,
     {
         let header = self.rpc.header(hash.map(|h| h.into())).await?;
         Ok(header)
@@ -382,8 +462,8 @@ impl<T: Runtime> Client<T> {
 
     /// Get a block
     pub async fn block<H>(&self, hash: Option<H>) -> Result<Option<ChainBlock<T>>, Error>
-    where
-        H: Into<T::Hash> + 'static,
+        where
+            H: Into<T::Hash> + 'static,
     {
         let block = self.rpc.block(hash.map(|h| h.into())).await?;
         Ok(block)
@@ -395,18 +475,27 @@ impl<T: Runtime> Client<T> {
         keys: Vec<StorageKey>,
         hash: Option<H>,
     ) -> Result<ReadProof<T::Hash>, Error>
-    where
-        H: Into<T::Hash> + 'static,
+        where
+            H: Into<T::Hash> + 'static,
     {
         let proof = self.rpc.read_proof(keys, hash.map(|h| h.into())).await?;
         Ok(proof)
     }
 
     /// Subscribe to events.
-    pub async fn subscribe_events(
-        &self,
-    ) -> Result<Subscription<StorageChangeSet<T::Hash>>, Error> {
+    ///
+    /// *WARNING* these may not be included in the finalized chain, use
+    /// `subscribe_finalized_events` to ensure events are finalized.
+    pub async fn subscribe_events(&self) -> Result<EventStorageSubscription<T>, Error> {
         let events = self.rpc.subscribe_events().await?;
+        Ok(events)
+    }
+
+    /// Subscribe to finalized events.
+    pub async fn subscribe_finalized_events(
+        &self,
+    ) -> Result<EventStorageSubscription<T>, Error> {
+        let events = self.rpc.subscribe_finalized_events().await?;
         Ok(events)
     }
 
@@ -447,8 +536,8 @@ impl<T: Runtime> Client<T> {
         call: C,
         signer: &(dyn Signer<T> + Send + Sync),
     ) -> Result<UncheckedExtrinsic<T>, Error>
-    where
-        <<T::Extra as SignedExtra<T>>::Extra as SignedExtension>::AdditionalSigned:
+        where
+            <<T::Extra as SignedExtra<T>>::Extra as SignedExtension>::AdditionalSigned:
             Send + Sync,
     {
         let account_nonce = if let Some(nonce) = signer.nonce() {
@@ -464,16 +553,13 @@ impl<T: Runtime> Client<T> {
             call,
             signer,
         )
-        .await?;
+            .await?;
         Ok(signed)
     }
 
-    /// Returns an events decoder for a call.
-    pub fn events_decoder<C: Call<T>>(&self) -> EventsDecoder<T> {
-        let metadata = self.metadata().clone();
-        let mut decoder = EventsDecoder::new(metadata);
-        C::events_decoder(&mut decoder);
-        decoder
+    /// Returns the events decoder.
+    pub fn events_decoder(&self) -> &EventsDecoder<T> {
+        &self.events_decoder
     }
 
     /// Create and submit an extrinsic and return corresponding Hash if successful
@@ -488,10 +574,9 @@ impl<T: Runtime> Client<T> {
     pub async fn submit_and_watch_extrinsic(
         &self,
         extrinsic: UncheckedExtrinsic<T>,
-        decoder: EventsDecoder<T>,
     ) -> Result<ExtrinsicSuccess<T>, Error> {
         self.rpc
-            .submit_and_watch_extrinsic(extrinsic, decoder)
+            .submit_and_watch_extrinsic(extrinsic, &self.events_decoder)
             .await
     }
 
@@ -501,8 +586,8 @@ impl<T: Runtime> Client<T> {
         call: C,
         signer: &(dyn Signer<T> + Send + Sync),
     ) -> Result<T::Hash, Error>
-    where
-        <<T::Extra as SignedExtra<T>>::Extra as SignedExtension>::AdditionalSigned:
+        where
+            <<T::Extra as SignedExtra<T>>::Extra as SignedExtension>::AdditionalSigned:
             Send + Sync,
     {
         let extrinsic = self.create_signed(call, signer).await?;
@@ -515,13 +600,12 @@ impl<T: Runtime> Client<T> {
         call: C,
         signer: &(dyn Signer<T> + Send + Sync),
     ) -> Result<ExtrinsicSuccess<T>, Error>
-    where
-        <<T::Extra as SignedExtra<T>>::Extra as SignedExtension>::AdditionalSigned:
+        where
+            <<T::Extra as SignedExtra<T>>::Extra as SignedExtension>::AdditionalSigned:
             Send + Sync,
     {
         let extrinsic = self.create_signed(call, signer).await?;
-        let decoder = self.events_decoder::<C>();
-        self.submit_and_watch_extrinsic(extrinsic, decoder).await
+        self.submit_and_watch_extrinsic(extrinsic).await
     }
 
     /// Insert a key into the keystore.
@@ -611,6 +695,7 @@ mod tests {
             chain_spec: test_node::chain_spec::development_config().unwrap(),
             role: Role::Authority(key),
             telemetry: None,
+            wasm_method: Default::default(),
         };
         let client = ClientBuilder::new()
             .set_client(
@@ -623,7 +708,6 @@ mod tests {
             .expect("Error creating client");
         (client, tmp)
     }
-
     pub(crate) async fn test_client() -> (Client<TestRuntime>, TempDir) {
         test_client_with(AccountKeyring::Alice).await
     }
@@ -634,7 +718,7 @@ mod tests {
         let (client, _tmp) = test_client_with(AccountKeyring::Bob).await;
         let mut blocks = client.subscribe_blocks().await.unwrap();
         // get the genesis block.
-        assert_eq!(blocks.next().await.number, 0);
+        assert_eq!(blocks.next().await.unwrap().number, 0);
         let public = AccountKeyring::Alice.public().as_array_ref().to_vec();
         client
             .insert_key(
@@ -649,7 +733,7 @@ mod tests {
             .await
             .unwrap());
         // Alice is an authority, so blocks should be produced.
-        assert_eq!(blocks.next().await.number, 1);
+        assert_eq!(blocks.next().await.unwrap().number, 1);
     }
 
     #[async_std::test]

@@ -30,15 +30,18 @@ use subxt::{
     balances::{
         AccountData,
         Balances,
+        BalancesEventTypeRegistry,
     },
-    //contracts::Contracts,
-    //sudo::Sudo,
-    system::System,
-    //session::Session,
-    //staking::Staking,
+    system::{
+        System,
+        SystemEventTypeRegistry,
+    },
+    EventTypeRegistry,
     Runtime,
-    //BasicSessionKeys
+    register_default_type_sizes
 };
+
+use self::phala::PhalaModuleEventTypeRegistry;
 
 /// PhalaNode concrete type definitions compatible with those for kusama, v0.7
 ///
@@ -46,12 +49,20 @@ use subxt::{
 ///
 /// Main difference is `type Address = AccountId`.
 /// Also the contracts module is not part of the kusama runtime.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Default)]
 pub struct PhalaNodeRuntime;
 
 impl Runtime for PhalaNodeRuntime {
     type Signature = MultiSignature;
     type Extra = DefaultExtra<Self>;
+
+    fn register_type_sizes(event_type_registry: &mut EventTypeRegistry<Self>) {
+        event_type_registry.with_system();
+
+        event_type_registry.with_phala_module();
+        event_type_registry.with_balances();
+        register_default_type_sizes(event_type_registry);
+    }
 }
 
 impl System for PhalaNodeRuntime {
@@ -75,14 +86,21 @@ pub mod phala {
     use codec::{Encode, Decode};
     use subxt::{
         module, Call,
-        system::{System, SystemEventsDecoder},
-        balances::{Balances, BalancesEventsDecoder}
+        system::System,
+        balances::Balances
     };
     use core::marker::PhantomData;
 
-    /// The subset of the `pallet_phala::Trait` that a client must implement.
+    #[derive(Encode, Decode, Debug, Default, Clone, PartialEq, Eq)]
+    pub struct EthereumTxHash([u8; 32]);
+    #[derive(Encode, Decode, Debug, Default, Clone, PartialEq, Eq)]
+    pub struct EthereumAddress([u8; 20]);
+
+
     #[module]
-    pub trait PhalaModule: System + Balances {}
+    pub trait PhalaModule: System + Balances {
+
+    }
 
     #[derive(Clone, Debug, PartialEq, Call, Encode)]
     pub struct PushCommandCall<T: PhalaModule> {

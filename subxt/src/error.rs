@@ -1,4 +1,4 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright 2019-2021 Parity Technologies (UK) Ltd.
 // This file is part of substrate-subxt.
 //
 // subxt is free software: you can redistribute it and/or modify
@@ -14,10 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with substrate-subxt.  If not, see <http://www.gnu.org/licenses/>.
 
-use jsonrpsee::{
-    client::RequestError,
-    transport::ws::WsNewDnsError,
-};
+use jsonrpsee_types::error::Error as RequestError;
 use sp_core::crypto::SecretStringError;
 use sp_runtime::{
     transaction_validity::TransactionValidityError,
@@ -42,9 +39,6 @@ pub enum Error {
     /// Rpc error.
     #[error("Rpc error: {0}")]
     Rpc(#[from] RequestError),
-    /// Error that can happen during the initial websocket handshake
-    #[error("Rpc error: {0}")]
-    WsHandshake(#[from] WsNewDnsError),
     /// Serde serialization error
     #[error("Serde json error: {0}")]
     Serialization(#[from] serde_json::error::Error),
@@ -57,6 +51,13 @@ pub enum Error {
     /// Metadata error.
     #[error("Metadata error: {0}")]
     Metadata(#[from] MetadataError),
+    /// Unregistered type sizes.
+    #[error(
+        "The following types do not have a type size registered: \
+            {0:?} \
+         Use `ClientBuilder::register_type_size` to register missing type sizes."
+    )]
+    MissingTypeSizes(Vec<String>),
     /// Type size unavailable.
     #[error("Type size unavailable while decoding event: {0:?}")]
     TypeSizeUnavailable(String),
@@ -98,18 +99,18 @@ pub enum RuntimeError {
     /// Module error.
     #[error("Runtime module error: {0}")]
     Module(ModuleError),
+    /// At least one consumer is remaining so the account cannot be destroyed.
+    #[error("At least one consumer is remaining so the account cannot be destroyed.")]
+    ConsumerRemaining,
+    /// There are no providers so the account cannot be created.
+    #[error("There are no providers so the account cannot be created.")]
+    NoProviders,
     /// Bad origin.
     #[error("Bad origin: throw by ensure_signed, ensure_root or ensure_none.")]
     BadOrigin,
     /// Cannot lookup.
     #[error("Cannot lookup some information required to validate the transaction.")]
     CannotLookup,
-    /// Consumer remaining
-    #[error("At least one consumer is remaining so the account cannot be destroyed.")]
-    ConsumerRemaining,
-    /// No providers
-    #[error("There are no providers so the account cannot be created.")]
-    NoProviders,
     /// Other error.
     #[error("Other error: {0}")]
     Other(String),

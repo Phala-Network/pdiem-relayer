@@ -1,4 +1,4 @@
-// Copyright 2019-2020 Parity Technologies (UK) Ltd.
+// Copyright 2019-2021 Parity Technologies (UK) Ltd.
 // This file is part of substrate-subxt.
 //
 // subxt is free software: you can redistribute it and/or modify
@@ -19,6 +19,8 @@
 // Related: https://github.com/paritytech/substrate-subxt/issues/66
 #![allow(irrefutable_let_patterns)]
 
+use std::sync::Arc;
+
 use codec::{
     Decode,
     Encode,
@@ -29,13 +31,22 @@ use core::{
     marker::PhantomData,
 };
 use frame_metadata::RuntimeMetadataPrefixed;
-use jsonrpsee::{
-    client::Subscription,
-    common::{
+use jsonrpsee_http_client::HttpClient;
+use jsonrpsee_types::{
+    error::Error as RpcError,
+    jsonrpc::{
         to_value as to_json_value,
+        DeserializeOwned,
         Params,
     },
-    Client,
+    traits::{
+        Client,
+        SubscriptionClient,
+    },
+};
+use jsonrpsee_ws_client::{
+    WsClient,
+    WsSubscription as Subscription,
 };
 use serde::{
     Deserialize,
@@ -47,7 +58,6 @@ use sp_core::{
         StorageData,
         StorageKey,
     },
-    twox_128,
     Bytes,
 };
 use sp_rpc::{
@@ -75,11 +85,16 @@ use crate::{
     },
     metadata::Metadata,
     runtimes::Runtime,
-    subscription::EventSubscription,
+    subscription::{
+        EventStorageSubscription,
+        EventSubscription,
+        FinalizedEventStorageSubscription,
+        SystemEvents,
+    },
 };
 
 pub type ChainBlock<T> =
-    SignedBlock<Block<<T as System>::Header, <T as System>::Extrinsic>>;
+SignedBlock<Block<<T as System>::Header, <T as System>::Extrinsic>>;
 
 /// Wrapper for NumberOrHex to allow custom From impls
 #[derive(Serialize)]
@@ -142,6 +157,90 @@ pub enum TransactionStatus<Hash, BlockHash> {
     Invalid,
 }
 
+#[cfg(any(feature = "client", test))]
+use substrate_subxt_client::SubxtClient;
+
+/// Rpc client wrapper.
+/// This is workaround because adding generic types causes the macros to fail.
+#[derive(Clone)]
+pub enum RpcClient {
+    /// JSONRPC client WebSocket transport.
+    WebSocket(WsClient),
+    /// JSONRPC client HTTP transport.
+    // NOTE: Arc because `HttpClient` is not clone.
+    Http(Arc<HttpClient>),
+    #[cfg(any(feature = "client", test))]
+    /// Embedded substrate node.
+    Subxt(SubxtClient),
+}
+
+impl RpcClient {
+    /// Start a JSON-RPC request.
+    pub async fn request<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Params,
+    ) -> Result<T, Error> {
+        match self {
+            Self::WebSocket(inner) => {
+                inner.request(method, params).await.map_err(Into::into)
+            }
+            Self::Http(inner) => inner.request(method, params).await.map_err(Into::into),
+            #[cfg(any(feature = "client", test))]
+            Self::Subxt(inner) => inner.request(method, params).await.map_err(Into::into),
+        }
+    }
+
+    /// Start a JSON-RPC Subscription.
+    pub async fn subscribe<T: DeserializeOwned>(
+        &self,
+        subscribe_method: &str,
+        params: Params,
+        unsubscribe_method: &str,
+    ) -> Result<Subscription<T>, Error> {
+        match self {
+            Self::WebSocket(inner) => {
+                inner
+                    .subscribe(subscribe_method, params, unsubscribe_method)
+                    .await
+                    .map_err(Into::into)
+            }
+            Self::Http(_) => {
+                Err(RpcError::Custom(
+                    "Subscriptions not supported on HTTP transport".to_owned(),
+                )
+                    .into())
+            }
+            #[cfg(any(feature = "client", test))]
+            Self::Subxt(inner) => {
+                inner
+                    .subscribe(subscribe_method, params, unsubscribe_method)
+                    .await
+                    .map_err(Into::into)
+            }
+        }
+    }
+}
+
+impl From<WsClient> for RpcClient {
+    fn from(client: WsClient) -> Self {
+        RpcClient::WebSocket(client)
+    }
+}
+
+impl From<HttpClient> for RpcClient {
+    fn from(client: HttpClient) -> Self {
+        RpcClient::Http(Arc::new(client))
+    }
+}
+
+#[cfg(any(feature = "client", test))]
+impl From<SubxtClient> for RpcClient {
+    fn from(client: SubxtClient) -> Self {
+        RpcClient::Subxt(client)
+    }
+}
+
 /// ReadProof struct returned by the RPC
 ///
 /// # Note
@@ -159,8 +258,9 @@ pub struct ReadProof<Hash> {
 
 /// Client for substrate rpc interfaces
 pub struct Rpc<T: Runtime> {
-    pub client: Client,
+    client: RpcClient,
     marker: PhantomData<T>,
+    accept_weak_inclusion: bool,
 }
 
 impl<T: Runtime> Clone for Rpc<T> {
@@ -168,16 +268,24 @@ impl<T: Runtime> Clone for Rpc<T> {
         Self {
             client: self.client.clone(),
             marker: PhantomData,
+            accept_weak_inclusion: self.accept_weak_inclusion,
         }
     }
 }
 
 impl<T: Runtime> Rpc<T> {
-    pub fn new(client: Client) -> Self {
+    pub fn new(client: RpcClient) -> Self {
         Self {
             client,
             marker: PhantomData,
+            accept_weak_inclusion: false,
         }
+    }
+
+    /// Configure the Rpc to accept non-finalized blocks
+    /// in `submit_and_watch_extrinsic`
+    pub fn accept_weak_inclusion(&mut self) {
+        self.accept_weak_inclusion = true;
     }
 
     /// Fetch a storage key
@@ -344,22 +452,31 @@ impl<T: Runtime> Rpc<T> {
         Ok(version)
     }
 
-    /// Subscribe to substrate System Events
-    pub async fn subscribe_events(
-        &self,
-    ) -> Result<Subscription<StorageChangeSet<T::Hash>>, Error> {
-        let mut storage_key = twox_128(b"System").to_vec();
-        storage_key.extend(twox_128(b"Events").to_vec());
-        log::debug!("Events storage key {:?}", hex::encode(&storage_key));
-
-        let keys = Some(vec![StorageKey(storage_key)]);
+    /// Subscribe to System Events that are imported into blocks.
+    ///
+    /// *WARNING* these may not be included in the finalized chain, use
+    /// `subscribe_finalized_events` to ensure events are finalized.
+    pub async fn subscribe_events(&self) -> Result<EventStorageSubscription<T>, Error> {
+        let keys = Some(vec![StorageKey::from(SystemEvents::new())]);
         let params = Params::Array(vec![to_json_value(keys)?]);
 
         let subscription = self
             .client
             .subscribe("state_subscribeStorage", params, "state_unsubscribeStorage")
             .await?;
-        Ok(subscription)
+        Ok(EventStorageSubscription::Imported(subscription))
+    }
+
+    /// Subscribe to finalized events.
+    pub async fn subscribe_finalized_events(
+        &self,
+    ) -> Result<EventStorageSubscription<T>, Error> {
+        Ok(EventStorageSubscription::Finalized(
+            FinalizedEventStorageSubscription::new(
+                self.clone(),
+                self.subscribe_finalized_blocks().await?,
+            ),
+        ))
     }
 
     /// Subscribe to blocks.
@@ -369,7 +486,7 @@ impl<T: Runtime> Rpc<T> {
             .subscribe(
                 "chain_subscribeNewHeads",
                 Params::None,
-                "chain_subscribeNewHeads",
+                "chain_unsubscribeNewHeads",
             )
             .await?;
 
@@ -385,7 +502,7 @@ impl<T: Runtime> Rpc<T> {
             .subscribe(
                 "chain_subscribeFinalizedHeads",
                 Params::None,
-                "chain_subscribeFinalizedHeads",
+                "chain_unsubscribeFinalizedHeads",
             )
             .await?;
         Ok(subscription)
@@ -423,64 +540,35 @@ impl<T: Runtime> Rpc<T> {
     }
 
     /// Create and submit an extrinsic and return corresponding Event if successful
-    pub async fn submit_and_watch_extrinsic<E: Encode + 'static>(
+    pub async fn submit_and_watch_extrinsic<'a, E: Encode + 'static>(
         &self,
         extrinsic: E,
-        decoder: EventsDecoder<T>,
+        decoder: &'a EventsDecoder<T>,
     ) -> Result<ExtrinsicSuccess<T>, Error> {
         let ext_hash = T::Hashing::hash_of(&extrinsic);
         log::info!("Submitting Extrinsic `{:?}`", ext_hash);
 
-        let events_sub = self.subscribe_events().await?;
+        let events_sub = if self.accept_weak_inclusion {
+            self.subscribe_events().await
+        } else {
+            self.subscribe_finalized_events().await
+        }?;
         let mut xt_sub = self.watch_extrinsic(extrinsic).await?;
 
-        while let status = xt_sub.next().await {
-            // log::info!("received status {:?}", status);
+        while let Some(status) = xt_sub.next().await {
+            log::info!("received status {:?}", status);
             match status {
                 // ignore in progress extrinsic for now
                 TransactionStatus::Future
                 | TransactionStatus::Ready
                 | TransactionStatus::Broadcast(_) => continue,
                 TransactionStatus::InBlock(block_hash) => {
-                    log::info!("Fetching block {:?}", block_hash);
-                    let block = self.block(Some(block_hash)).await?;
-                    return match block {
-                        Some(signed_block) => {
-                            log::info!(
-                                "Found block {:?}, with {} extrinsics",
-                                block_hash,
-                                signed_block.block.extrinsics.len()
-                            );
-                            let ext_index = signed_block
-                                .block
-                                .extrinsics
-                                .iter()
-                                .position(|ext| {
-                                    let hash = T::Hashing::hash_of(ext);
-                                    hash == ext_hash
-                                })
-                                .ok_or_else(|| {
-                                    Error::Other(format!(
-                                        "Failed to find Extrinsic with hash {:?}",
-                                        ext_hash,
-                                    ))
-                                })?;
-                            let mut sub = EventSubscription::new(events_sub, decoder);
-                            sub.filter_extrinsic(block_hash, ext_index);
-                            let mut events = vec![];
-                            while let Some(event) = sub.next().await {
-                                events.push(event?);
-                            }
-                            Ok(ExtrinsicSuccess {
-                                block: block_hash,
-                                extrinsic: ext_hash,
-                                events,
-                            })
-                        }
-                        None => {
-                            Err(format!("Failed to find block {:?}", block_hash).into())
-                        }
+                    if self.accept_weak_inclusion {
+                        return self
+                            .process_block(events_sub, decoder, block_hash, ext_hash)
+                            .await
                     }
+                    continue
                 }
                 TransactionStatus::Invalid => return Err("Extrinsic Invalid".into()),
                 TransactionStatus::Usurped(_) => return Err("Extrinsic Usurped".into()),
@@ -488,16 +576,62 @@ impl<T: Runtime> Rpc<T> {
                 TransactionStatus::Retracted(_) => {
                     return Err("Extrinsic Retracted".into())
                 }
-                // should have made it `InBlock` before either of these
-                TransactionStatus::Finalized(_) => {
-                    return Err("Extrinsic Finalized".into())
+                TransactionStatus::Finalized(block_hash) => {
+                    // read finalized blocks by default
+                    return self
+                        .process_block(events_sub, decoder, block_hash, ext_hash)
+                        .await
                 }
                 TransactionStatus::FinalityTimeout(_) => {
                     return Err("Extrinsic FinalityTimeout".into())
                 }
             }
         }
-        unreachable!()
+        Err(RpcError::Custom("RPC subscription dropped".into()).into())
+    }
+
+    async fn process_block<'a>(
+        &self,
+        events_sub: EventStorageSubscription<T>,
+        decoder: &'a EventsDecoder<T>,
+        block_hash: T::Hash,
+        ext_hash: T::Hash,
+    ) -> Result<ExtrinsicSuccess<T>, Error> {
+        log::info!("Fetching block {:?}", block_hash);
+        if let Some(signed_block) = self.block(Some(block_hash)).await? {
+            log::info!(
+                "Found block {:?}, with {} extrinsics",
+                block_hash,
+                signed_block.block.extrinsics.len()
+            );
+            let ext_index = signed_block
+                .block
+                .extrinsics
+                .iter()
+                .position(|ext| {
+                    let hash = T::Hashing::hash_of(ext);
+                    hash == ext_hash
+                })
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "Failed to find Extrinsic with hash {:?}",
+                        ext_hash,
+                    ))
+                })?;
+            let mut sub = EventSubscription::new(events_sub, &decoder);
+            sub.filter_extrinsic(block_hash, ext_index);
+            let mut events = vec![];
+            while let Some(event) = sub.next().await {
+                events.push(event?);
+            }
+            Ok(ExtrinsicSuccess {
+                block: block_hash,
+                extrinsic: ext_hash,
+                events,
+            })
+        } else {
+            Err(format!("Failed to find block {:?}", block_hash).into())
+        }
     }
 
     /// Insert a key into the keystore.
