@@ -587,6 +587,8 @@ async fn bridge(args: Args) -> Result<(), Error> {
 #[tokio::main]
 async fn main() {
     let args = Args::from_args();
-    let r = bridge(args).await;
-    println!("bridge() exited with result: {:?}", r);
+    match bridge(args).await {
+        Ok(()) => println!("bridge() exited sucessfully"),
+        Err(e) => panic!("bridge() exited with result: {:?}", e)
+    }
 }
