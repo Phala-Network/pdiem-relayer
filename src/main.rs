@@ -54,6 +54,7 @@ type PrClient = pruntime_client::PRuntimeClient;
 
 const DIEM_CONTRACT_ID: u32 = 5;
 const INTERVAL: u64 = 1_000 * 60 * 3;
+const RECEIVING_EVENTS_LIMIT: u64 = 100;
 
 use crate::error::Error;
 use crate::types::{CommandReqData};
@@ -283,18 +284,16 @@ impl DiemBridge {
             let command_value = serde_json::to_value(&CommandReqData::AccountData { account_data_b64 })?;
             let _ = self.push_command(command_value.to_string(), &client, signer).await;
 
-            if account_info.sequence_number > 0 {
-                // Sync receiving transactions
-                let _ = self.sync_receiving_transactions(
-                    &pr,
-                    account_view.received_events_key.0.clone().to_string(),
-                    account_view.sequence_number.clone(),
-                    account_address.clone(),
-                    &mut state_initiated,
-                    &client,
-                    signer,
-                ).await?;
-            }
+            // Sync receiving transactions
+            let _ = self.sync_receiving_transactions(
+                &pr,
+                account_view.received_events_key.0.clone().to_string(),
+                RECEIVING_EVENTS_LIMIT,
+                account_address.clone(),
+                &mut state_initiated,
+                &client,
+                signer,
+            ).await?;
 
             // Sync sending transactions
             let _ = self.sync_sent_transactions(&pr, account_address, &mut state_initiated, &client, signer).await?;
@@ -309,14 +308,14 @@ impl DiemBridge {
         &mut self,
         pr: &PrClient,
         received_events_key: String,
-        sequence_number: u64,
+        limit: u64,
         account_address: String,
         state_initiated: &mut bool,
         client: &XtClient,
         signer: &mut SrSigner,
     ) -> Result<(), Error> {
         let mut batch = JsonRpcBatch::new();
-        batch.add_get_events_request(received_events_key.to_string(), 0, sequence_number);
+        batch.add_get_events_request(received_events_key.to_string(), 0, limit);
         let resp = self.request_rpc(batch).map_err(|_| Error::FailedToGetReceivingTransactions)?;
 
         let received_events = EventView::vec_from_response(resp).unwrap();
