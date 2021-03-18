@@ -14,7 +14,7 @@ use diem_types::{
     },
     chain_id::ChainId,
     ledger_info::LedgerInfoWithSignatures,
-    transaction::TransactionInfo,
+    transaction::{TransactionInfo, SignedTransaction},
     epoch_change::EpochChangeProof,
     proof::{
         AccountStateProof,
@@ -42,7 +42,7 @@ mod error;
 mod runtimes;
 
 use std::cmp;
-use crate::types::{Runtime, Payload};
+use crate::types::{Runtime, Payload, QueryReqData, QueryRespData, TransactionData};
 use subxt::Signer;
 use subxt::system::AccountStoreExt;
 use core::marker::PhantomData;
@@ -53,13 +53,14 @@ type XtClient = subxt::Client<Runtime>;
 type PrClient = pruntime_client::PRuntimeClient;
 
 const DIEM_CONTRACT_ID: u32 = 5;
-const INTERVAL: u64 = 1_000 * 60 * 3;
+const INTERVAL: u64 = 1_000 * 60 * 1;
 const RECEIVING_EVENTS_LIMIT: u64 = 100;
 
 use crate::error::Error;
 use crate::types::{CommandReqData};
 
 use serde::{Serialize, Deserialize};
+use codec::Decode;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "pDiem")]
@@ -138,7 +139,7 @@ impl DiemBridge {
     pub fn new(url: &str) -> Result<Self> {
         let rpc_client = JsonRpcClient::new(Url::parse(url).unwrap()).unwrap();
         Ok(DiemBridge {
-            chain_id: ChainId::new(2),
+            chain_id: ChainId::new(2), //TESTNET: 2,  TESTING:4
             rpc_client,
             sent_events_key: None,
             received_events_key: None,
@@ -554,6 +555,46 @@ impl DiemBridge {
             Err(Error::FailedToGetResponse)
         }
     }
+
+    async fn submit_signed_transaction(
+        &mut self,
+        pr: &PrClient,
+        start_seq: &mut u64,
+    ) -> Result<(), Error> {
+
+        let resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::GetSignedTransactions { start: *start_seq}).await?;
+        println!("query signed transaction resp:{:?}", resp);
+        if let QueryRespData::GetSignedTransactions { queue_b64 } = resp {
+            let data = base64::decode(&queue_b64).unwrap();
+            let transaction_data: Vec<TransactionData> = Decode::decode(&mut &data[..]).unwrap();
+            for td in transaction_data.clone() {
+                println!("transaction data:{:?}", td);
+                let signed_tx: SignedTransaction = bcs::from_bytes(&td.signed_tx).unwrap();
+                println!("signed transaction:{:?}", signed_tx);
+                let mut batch = JsonRpcBatch::new();
+                batch.add_submit_request(signed_tx);
+                //let _resp = self.request_rpc(batch).map_err(|_| Error::FailedToSubmitTransaction)?;
+                match self.request_rpc(batch) {
+                    Ok(_) => {
+                        println!("submit transaction for {:?}", hex::decode(&td.address));
+
+                        if td.sequence > *start_seq {
+                            *start_seq = td.sequence
+                        }
+                    }
+                    Err(_) => {
+                        println!("request rpc error");
+                    }
+                }
+
+            }
+            if transaction_data.len() > 0 {
+                *start_seq = *start_seq + 1;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 async fn bridge(args: Args) -> Result<(), Error> {
@@ -575,8 +616,12 @@ async fn bridge(args: Args) -> Result<(), Error> {
     //hard code Alice account
     let addr: String = "0xd4f0c053205ba934bb2ac0c4e8479e77".to_string();
 
+    let mut start_seq = 1;
+
     loop {
-        let _= diem.sync_account(&pr, addr.clone(), &client, &mut signer).await;
+        let _ = diem.sync_account(&pr, addr.clone(), &client, &mut signer).await;
+
+        let _ = diem.submit_signed_transaction(&pr, &mut start_seq).await;
 
         println!("Waiting for next loop");
         tokio::time::delay_for(std::time::Duration::from_millis(INTERVAL)).await;

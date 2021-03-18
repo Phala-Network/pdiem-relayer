@@ -1,5 +1,5 @@
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
-
+use codec::{Encode, Decode};
 // Node Runtime
 use crate::runtimes::PhalaNodeRuntime;
 pub type Runtime = PhalaNodeRuntime;
@@ -66,10 +66,17 @@ pub enum CommandReqData {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum QueryReqData {
-
+    GetSignedTransactions { start: u64 }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum QueryRespData {
+    GetSignedTransactions { queue_b64: String }
+}
 
+#[derive(Serialize, Deserialize, Debug, Clone, Encode, Decode)]
+pub struct TransactionData {
+    pub sequence: u64,
+    pub address: Vec<u8>,
+    pub signed_tx: Vec<u8>,
 }

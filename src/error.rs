@@ -14,6 +14,7 @@ pub enum Error {
     FailedToCallPushCommand,
     FailedToGetReceivingTransactions,
     FailedToGetSentTransactions,
+    FailedToSubmitTransaction,
 }
 
 impl From<hyper::error::Error> for Error {
