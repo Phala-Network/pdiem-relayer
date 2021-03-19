@@ -8,3 +8,4 @@
 /client/swiss-knife/target
 /client/libra-client/target
 /language/tools/move-explain/target
+.DS_Store
