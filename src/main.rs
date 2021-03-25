@@ -1,4 +1,5 @@
 use structopt::StructOpt;
+use std::collections::BTreeMap;
 
 use diem_client::{
     AccountData,
@@ -95,13 +96,17 @@ pub struct DiemBridge {
     trusted_state: Option<TrustedState>,
     latest_epoch_change_li: Option<LedgerInfoWithSignatures>,
     latest_li: Option<LedgerInfoWithSignatures>,
-    sent_events_key: Option<BytesView>,
-    received_events_key:Option<BytesView>,
-    sent_events: Option<Vec<EventView>>,
-    received_events: Option<Vec<EventView>>,
-    transactions: Option<Vec<TransactionView>>,
-    account: Option<AccountData>,
-    balances: Option<Vec<AmountView>>,
+    //sent_events_key: Option<BytesView>,
+    //received_events_key:Option<BytesView>,
+    //sent_events: Option<Vec<EventView>>,
+    //received_events: Option<Vec<EventView>>,
+    //transactions: Option<Vec<TransactionView>>,
+    //account: Option<AccountData>,
+    received_events: BTreeMap<String, Vec<EventView>>,
+    transactions: BTreeMap<String, Vec<TransactionView>>,
+    account: BTreeMap<String, AccountData>,
+    //balances: Option<Vec<AmountView>>,
+    address: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -141,17 +146,18 @@ impl DiemBridge {
         Ok(DiemBridge {
             chain_id: ChainId::new(2), //TESTNET: 2,  TESTING:4
             rpc_client,
-            sent_events_key: None,
-            received_events_key: None,
+            //sent_events_key: None,
+            //received_events_key: None,
             epoch_change_proof: None,
             trusted_state: None,
             latest_epoch_change_li: None,
             latest_li: None,
-            sent_events: None,
-            received_events: None,
-            transactions:None,
-            account: None,
-            balances: None,
+            //sent_events: None,
+            received_events: BTreeMap::<String, Vec<EventView>>::new(),
+            transactions: BTreeMap::<String, Vec<TransactionView>>::new(),
+            account: BTreeMap::<String, AccountData>::new(),
+            //balances: None,
+            address: Vec::new(),
         })
     }
 
@@ -257,28 +263,29 @@ impl DiemBridge {
         let resp = self.request_rpc(batch).map_err(|_| Error::FailedToGetResponse)?;
 
         if let Some(account_view) = AccountView::optional_from_response(resp).unwrap() {
-            self.account = Some(AccountData {
+            self.account.insert(account_address.clone(), AccountData {
                 address,
                 authentication_key: account_view.authentication_key.into_bytes().ok(),
                 key_pair: None,
                 sequence_number: account_view.sequence_number,
                 status: AccountStatus::Persisted,
             });
-            self.sent_events_key = Some(account_view.sent_events_key.clone());
-            self.received_events_key = Some(account_view.received_events_key.clone());
-            self.balances = Some(account_view.balances.clone());
 
-            let balances: Vec<Amount> = self.balances.as_ref().unwrap()
+            let sent_events_key = account_view.sent_events_key;
+            let received_events_key = account_view.received_events_key.clone();
+            let balances = Some(account_view.balances.clone());
+
+            let amounts: Vec<Amount> = balances.as_ref().unwrap()
                 .iter()
                 .map(|b| Amount{ amount: b.amount, currency: b.currency.clone() }).collect();
-
+            let account = self.account.get(&account_address).unwrap();
             let account_info = AccountInfo {
-                address: self.account.as_ref().unwrap().address,
-                authentication_key: self.account.as_ref().unwrap().authentication_key.clone(),
-                sequence_number: self.account.as_ref().unwrap().sequence_number,
-                sent_events_key: self.sent_events_key.clone().unwrap().0,
-                received_events_key: self.received_events_key.clone().unwrap().0,
-                balances,
+                address: account.address,
+                authentication_key: account.authentication_key.clone(),
+                sequence_number: account.sequence_number,
+                sent_events_key: sent_events_key.0,
+                received_events_key: received_events_key.0,
+                balances: amounts,
             };
 
             let account_data_b64 = base64::encode(&bcs::to_bytes(&account_info).unwrap());
@@ -322,8 +329,8 @@ impl DiemBridge {
         let received_events = EventView::vec_from_response(resp).unwrap();
         let mut new_events: Vec<EventView> = Vec::new();
         for event in received_events.clone() {
-            let exist = self.received_events.as_ref().is_some()
-                && self.received_events.as_ref().unwrap().iter().any(|x| x.transaction_version == event.transaction_version);
+            let exist = self.received_events.get(&account_address).is_some()
+                && self.received_events.get(&account_address).unwrap().iter().any(|x| x.transaction_version == event.transaction_version);
             if !exist {
                 println!("new received event!");
                 new_events.push(event);
@@ -350,7 +357,7 @@ impl DiemBridge {
             }
         }
 
-        self.received_events = Some(received_events);
+        self.received_events.insert(account_address, received_events);
 
         Ok(())
     }
@@ -365,17 +372,17 @@ impl DiemBridge {
     ) -> Result<(), Error> {
         let mut batch = JsonRpcBatch::new();
         batch.add_get_account_transactions_request(
-            self.account.as_ref().unwrap().address.clone(),
+            self.account.get(&account_address).unwrap().address.clone(),
             0,
-            self.account.as_ref().unwrap().sequence_number.clone(),
+            self.account.get(&account_address).unwrap().sequence_number.clone(),
             false
         );
         let resp = self.request_rpc(batch).map_err(|_| Error::FailedToGetSentTransactions)?;
         let mut need_sync_transactions: Vec<TransactionView> = Vec::new();
         let transactions = TransactionView::vec_from_response(resp).unwrap();
         for transaction in transactions.clone() {
-            let exist = self.transactions.as_ref().is_some()
-                && self.transactions.as_ref().unwrap().iter().any(|x| x.version == transaction.version);
+            let exist = self.transactions.get(&account_address).is_some()
+                && self.transactions.get(&account_address).unwrap().iter().any(|x| x.version == transaction.version);
             if !exist {
                 println!("new transaction!");
                 match transaction.transaction {
@@ -402,7 +409,7 @@ impl DiemBridge {
             ).await?;
         }
 
-        self.transactions = Some(transactions);
+        self.transactions.insert(account_address, transactions);
 
         Ok(())
     }
@@ -415,7 +422,7 @@ impl DiemBridge {
         client: &XtClient,
         signer: &mut SrSigner,
     ) -> Result<(), Error> {
-        if let Ok(transaction_with_proof) = self.get_transaction_proof(&transaction) {
+        if let Ok(transaction_with_proof) = self.get_transaction_proof(account_address.clone(), &transaction) {
             println!("transaction_with_proof:{:?}", transaction_with_proof);
 
             let transaction_with_proof_b64 = base64::encode(&bcs::to_bytes(&transaction_with_proof).unwrap());
@@ -463,10 +470,11 @@ impl DiemBridge {
 
     fn get_transaction_proof(
         &mut self,
+        account_address: String,
         transaction: &TransactionView,
     ) -> Result<TransactionWithProof, Error> {
         let mut batch = JsonRpcBatch::new();
-        let account = self.account.as_ref().unwrap().address.clone();
+        let account = self.account.get(&account_address).unwrap().address.clone();
         batch.add_get_account_state_with_proof_request(
             account,
             Some(transaction.version),
@@ -499,7 +507,7 @@ impl DiemBridge {
             let _ = account_transaction_state_proof.verify(
                 self.latest_li.as_ref().unwrap().ledger_info(),
                 transaction.version,
-                self.account.as_ref().unwrap().address.hash(),
+                self.account.get(&account_address).unwrap().address.hash(),
                 Some(&account_state_blob),
             );
             println!("Transaction was verified");
@@ -561,7 +569,6 @@ impl DiemBridge {
         pr: &PrClient,
         start_seq: &mut u64,
     ) -> Result<(), Error> {
-
         let resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::GetSignedTransactions { start: *start_seq}).await?;
         println!("query signed transaction resp:{:?}", resp);
         if let QueryRespData::GetSignedTransactions { queue_b64 } = resp {
@@ -573,10 +580,14 @@ impl DiemBridge {
                 println!("signed transaction:{:?}", signed_tx);
                 let mut batch = JsonRpcBatch::new();
                 batch.add_submit_request(signed_tx);
-                //let _resp = self.request_rpc(batch).map_err(|_| Error::FailedToSubmitTransaction)?;
                 match self.request_rpc(batch) {
                     Ok(_) => {
-                        println!("submit transaction for {:?}", hex::decode(&td.address));
+                        let receiver_address = "0x".to_string() + &hex::encode_upper(td.address.clone());
+                        println!("submit transaction for {:?}", receiver_address);
+
+                        if !self.address.contains(&receiver_address) {
+                            self.address.push(receiver_address);
+                        }
 
                         if td.sequence > *start_seq {
                             *start_seq = td.sequence
@@ -614,12 +625,17 @@ async fn bridge(args: Args) -> Result<(), Error> {
     diem.init_state(Some(&pr), &client, &mut signer).await?;
 
     //hard code Alice account
-    let addr: String = "0xd4f0c053205ba934bb2ac0c4e8479e77".to_string();
+    let alice_addr: String = "0xD4F0C053205BA934BB2AC0C4E8479E77".to_string();
+    diem.address.push(alice_addr);
 
     let mut start_seq = 1;
 
     loop {
-        let _ = diem.sync_account(&pr, addr.clone(), &client, &mut signer).await;
+        let address = diem.address.clone();
+        for addr in address {
+            println!("sync account: {:}", addr);
+            let _ = diem.sync_account(&pr, addr.clone(), &client, &mut signer).await;
+        }
 
         let _ = diem.submit_signed_transaction(&pr, &mut start_seq).await;
 
