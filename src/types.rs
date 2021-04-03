@@ -62,16 +62,19 @@ pub enum CommandReqData {
     AccountData { account_data_b64: String },
     VerifyTransaction { account_address: String, transaction_with_proof_b64: String },
     SetTrustedState { trusted_state_b64: String },
+    VerifyEpochProof { ledger_info_with_signatures_b64: String, epoch_change_proof_b64: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum QueryReqData {
-    GetSignedTransactions { start: u64 }
+    GetSignedTransactions { start: u64 },
+    CurrentState,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum QueryRespData {
-    GetSignedTransactions { queue_b64: String }
+    GetSignedTransactions { queue_b64: String },
+    CurrentState { state: State },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Encode, Decode)]
@@ -79,4 +82,11 @@ pub struct TransactionData {
     pub sequence: u64,
     pub address: Vec<u8>,
     pub signed_tx: Vec<u8>,
+    pub new_account: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct State {
+    pub queue_seq: u64,
+    pub account_address: Vec<String>,
 }
