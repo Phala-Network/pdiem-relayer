@@ -68,7 +68,7 @@ pub enum CommandReqData {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum QueryReqData {
     GetSignedTransactions { start: u64 },
-    CurrentState,
+    CurrentState { chain_id: u8 },
 }
 
 #[derive(Serialize, Deserialize, Debug)]

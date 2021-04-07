@@ -13,7 +13,7 @@ use diem_types::{
     account_address::{
         AccountAddress,
     },
-    chain_id::ChainId,
+    chain_id::{ChainId, NamedChain},
     ledger_info::LedgerInfoWithSignatures,
     transaction::{TransactionInfo, SignedTransaction},
     epoch_change::EpochChangeProof,
@@ -34,7 +34,6 @@ use diem_json_rpc_client::{
     JsonRpcBatch, JsonRpcClient, ResponseAsView, JsonRpcResponse,
 };
 use std::{convert::TryFrom};
-use diem_json_rpc_types::views::AmountView;
 use diem_types::account_state_blob::AccountStateBlob;
 
 mod pruntime_client;
@@ -143,8 +142,14 @@ pub struct TransactionWithProof {
 impl DiemBridge {
     pub fn new(url: &str) -> Result<Self> {
         let rpc_client = JsonRpcClient::new(Url::parse(url).unwrap()).unwrap();
+        let chain_id = if url == "https://testnet.diem.com" {
+            NamedChain::TESTNET
+        } else {
+            NamedChain::TESTING
+        };
+
         Ok(DiemBridge {
-            chain_id: ChainId::new(2), //TESTNET: 2,  TESTING:4
+            chain_id: ChainId::new(chain_id.id()),
             rpc_client,
             //sent_events_key: None,
             //received_events_key: None,
@@ -605,12 +610,11 @@ async fn bridge(args: Args) -> Result<(), Error> {
     let mut signer: SrSigner = subxt::PairSigner::new(pair);
 
     let pr = PrClient::new(&args.pruntime_endpoint);
-
-    diem.init_state(Some(&pr), &client, &mut signer, true).await?;
-
-    let resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::CurrentState).await?;
+    let resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::CurrentState{ chain_id: diem.chain_id.id() }).await?;
     if let QueryRespData::CurrentState { state } = resp {
         println!("current state: {:?}", state);
+
+        diem.init_state(Some(&pr), &client, &mut signer, true).await?;
 
         diem.address = state.account_address;
         let mut start_seq = state.queue_seq;
