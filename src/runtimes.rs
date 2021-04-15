@@ -41,7 +41,7 @@ use subxt::{
     register_default_type_sizes
 };
 
-use self::phala::PhalaModuleEventTypeRegistry;
+use self::phala::PhalaEventTypeRegistry;
 
 /// PhalaNode concrete type definitions compatible with those for kusama, v0.7
 ///
@@ -59,7 +59,7 @@ impl Runtime for PhalaNodeRuntime {
     fn register_type_sizes(event_type_registry: &mut EventTypeRegistry<Self>) {
         event_type_registry.with_system();
 
-        event_type_registry.with_phala_module();
+        event_type_registry.with_phala();
         event_type_registry.with_balances();
         register_default_type_sizes(event_type_registry);
     }
@@ -81,7 +81,7 @@ impl Balances for PhalaNodeRuntime {
     type Balance = u128;
 }
 
-impl phala::PhalaModule for PhalaNodeRuntime {}
+impl phala::Phala for PhalaNodeRuntime {}
 pub mod phala {
     use codec::{Encode, Decode};
     use subxt::{
@@ -98,12 +98,12 @@ pub mod phala {
 
 
     #[module]
-    pub trait PhalaModule: System + Balances {
+    pub trait Phala: System + Balances {
 
     }
 
     #[derive(Clone, Debug, PartialEq, Call, Encode)]
-    pub struct PushCommandCall<T: PhalaModule> {
+    pub struct PushCommandCall<T: Phala> {
         pub _runtime: PhantomData<T>,
         pub contract_id: u32,
         pub payload: Vec<u8>,
