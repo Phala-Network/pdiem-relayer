@@ -53,7 +53,6 @@ type XtClient = subxt::Client<Runtime>;
 type PrClient = pruntime_client::PRuntimeClient;
 
 const DIEM_CONTRACT_ID: u32 = 5;
-const INTERVAL: u64 = 1_000 * 60 * 1;
 const RECEIVING_EVENTS_LIMIT: u64 = 100;
 
 use crate::error::Error;
@@ -86,6 +85,10 @@ struct Args {
     default_value = "ws://localhost:9944", long,
     help = "Substrate rpc websocket endpoint")]
     substrate_ws_endpoint: String,
+
+    #[structopt(default_value = "15", long,
+    help = "The interval in seconds.")]
+    interval: u64,
 }
 
 pub struct DiemBridge {
@@ -95,16 +98,9 @@ pub struct DiemBridge {
     trusted_state: Option<TrustedState>,
     latest_epoch_change_li: Option<LedgerInfoWithSignatures>,
     latest_li: Option<LedgerInfoWithSignatures>,
-    //sent_events_key: Option<BytesView>,
-    //received_events_key:Option<BytesView>,
-    //sent_events: Option<Vec<EventView>>,
-    //received_events: Option<Vec<EventView>>,
-    //transactions: Option<Vec<TransactionView>>,
-    //account: Option<AccountData>,
     received_events: BTreeMap<String, Vec<EventView>>,
     transactions: BTreeMap<String, Vec<TransactionView>>,
     account: BTreeMap<String, AccountData>,
-    //balances: Option<Vec<AmountView>>,
     address: Vec<String>,
 }
 
@@ -147,21 +143,17 @@ impl DiemBridge {
         } else {
             NamedChain::TESTING
         };
-
+        println!("{}", url);
         Ok(DiemBridge {
             chain_id: ChainId::new(chain_id.id()),
             rpc_client,
-            //sent_events_key: None,
-            //received_events_key: None,
             epoch_change_proof: None,
             trusted_state: None,
             latest_epoch_change_li: None,
             latest_li: None,
-            //sent_events: None,
             received_events: BTreeMap::<String, Vec<EventView>>::new(),
             transactions: BTreeMap::<String, Vec<TransactionView>>::new(),
             account: BTreeMap::<String, AccountData>::new(),
-            //balances: None,
             address: Vec::new(),
         })
     }
@@ -220,7 +212,6 @@ impl DiemBridge {
         batch.add_get_state_proof_request(0);
         if let Ok(resp) = self.request_rpc(batch) {
             let state_proof = StateProofView::from_response(resp).unwrap();
-            //println!("state_proof:\n{:?}", state_proof);
 
             let epoch_change_proof: EpochChangeProof =
                 bcs::from_bytes(&state_proof.epoch_change_proof.into_bytes().unwrap()).unwrap();
@@ -244,7 +235,7 @@ impl DiemBridge {
                 if initialized {
                     let trusted_state_b64 = base64::encode(&bcs::to_bytes(&zero_ledger_info_with_sigs).unwrap());
 
-                    let command_value = serde_json::to_value(&CommandReqData::SetTrustedState { trusted_state_b64 })?;
+                    let command_value = serde_json::to_value(&CommandReqData::SetTrustedState { trusted_state_b64, chain_id: self.chain_id.id() })?;
                     let _ = self.push_command(command_value.to_string(), &client, signer).await;
                 } else {
                     let ledger_info_with_signatures_b64 = base64::encode(&bcs::to_bytes(&ledger_info_with_signatures).unwrap());
@@ -270,7 +261,7 @@ impl DiemBridge {
     ) -> Result<(), Error> {
         // Init account information
         let mut batch = JsonRpcBatch::new();
-        let address = AccountAddress::from_hex_literal(&account_address).unwrap();
+        let address = AccountAddress::from_hex_literal(&("0x".to_string() + &account_address)).unwrap();
         batch.add_get_account_request(address);
         let resp = self.request_rpc(batch).map_err(|_| Error::FailedToGetResponse)?;
 
@@ -300,8 +291,8 @@ impl DiemBridge {
                 balances: amounts,
             };
 
-            let account_data_b64 = base64::encode(&bcs::to_bytes(&account_info).unwrap());
-            let command_value = serde_json::to_value(&CommandReqData::AccountData { account_data_b64 })?;
+            let account_info_b64 = base64::encode(&bcs::to_bytes(&account_info).unwrap());
+            let command_value = serde_json::to_value(&CommandReqData::AccountInfo { account_info_b64 })?;
             let _ = self.push_command(command_value.to_string(), &client, signer).await;
 
             // Sync receiving transactions
@@ -553,7 +544,7 @@ impl DiemBridge {
         }
     }
 
-    async fn submit_signed_transaction(
+    async fn maybe_submit_signed_transaction(
         &mut self,
         pr: &PrClient,
         start_seq: &mut u64,
@@ -563,7 +554,7 @@ impl DiemBridge {
         if let QueryRespData::GetSignedTransactions { queue_b64 } = resp {
             let data = base64::decode(&queue_b64).unwrap();
             let transaction_data: Vec<TransactionData> = Decode::decode(&mut &data[..]).unwrap();
-            for td in transaction_data.clone() {
+            for td in &transaction_data {
                 println!("transaction data:{:?}", td);
                 let signed_tx: SignedTransaction = bcs::from_bytes(&td.signed_tx).unwrap();
                 println!("signed transaction:{:?}", signed_tx);
@@ -571,7 +562,7 @@ impl DiemBridge {
                 let _ = batch.add_submit_request(signed_tx);
                 match self.request_rpc(batch) {
                     Ok(_) => {
-                        let receiver_address = "0x".to_string() + &hex::encode_upper(td.address.clone());
+                        let receiver_address = hex::encode_upper(td.address.clone());
                         println!("submit transaction for {:?}", receiver_address);
 
                         if td.new_account && !self.address.contains(&receiver_address) {
@@ -610,7 +601,7 @@ async fn bridge(args: Args) -> Result<(), Error> {
     let mut signer: SrSigner = subxt::PairSigner::new(pair);
 
     let pr = PrClient::new(&args.pruntime_endpoint);
-    let resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::CurrentState{ chain_id: diem.chain_id.id() }).await?;
+    let resp = pr.query(DIEM_CONTRACT_ID, QueryReqData::CurrentState).await?;
     if let QueryRespData::CurrentState { state } = resp {
         println!("current state: {:?}", state);
 
@@ -628,10 +619,10 @@ async fn bridge(args: Args) -> Result<(), Error> {
                 let _ = diem.sync_account(addr.clone(), &client, &mut signer).await;
             }
 
-            let _ = diem.submit_signed_transaction(&pr, &mut start_seq).await;
+            let _ = diem.maybe_submit_signed_transaction(&pr, &mut start_seq).await;
 
             println!("Waiting for next loop\n");
-            tokio::time::delay_for(std::time::Duration::from_millis(INTERVAL)).await;
+            tokio::time::delay_for(std::time::Duration::from_millis(args.interval * 1000)).await;
         }
     } else {
         println!("query state error");

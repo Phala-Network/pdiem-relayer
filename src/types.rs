@@ -59,16 +59,16 @@ impl Resp for QueryReq {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum CommandReqData {
-    AccountData { account_data_b64: String },
+    AccountInfo { account_info_b64: String },
     VerifyTransaction { account_address: String, transaction_with_proof_b64: String },
-    SetTrustedState { trusted_state_b64: String },
+    SetTrustedState { trusted_state_b64: String, chain_id: u8 },
     VerifyEpochProof { ledger_info_with_signatures_b64: String, epoch_change_proof_b64: String },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum QueryReqData {
     GetSignedTransactions { start: u64 },
-    CurrentState { chain_id: u8 },
+    CurrentState,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
