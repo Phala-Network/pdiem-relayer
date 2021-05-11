@@ -8,7 +8,7 @@ use diem_types::{
         AccountResource, AccountRole, BalanceResource, BaseUrlRotationEvent, BurnEvent,
         CancelBurnEvent, ComplianceKeyRotationEvent, CurrencyInfoResource, FreezingBit, MintEvent,
         NewBlockEvent, NewEpochEvent, PreburnEvent, ReceivedMintEvent, ReceivedPaymentEvent,
-        SentPaymentEvent, ToXDXExchangeRateUpdateEvent, UpgradeEvent
+        SentPaymentEvent, ToXDXExchangeRateUpdateEvent, DesignatedDealerPreburns
     },
     account_state_blob::AccountStateWithProof,
     contract_event::ContractEvent,
@@ -664,12 +664,34 @@ impl From<AccountRole> for AccountRoleView {
                 base_url: dd_credential.base_url().to_string(),
                 expiration_time: dd_credential.expiration_date(),
                 compliance_key: BytesView::from(dd_credential.compliance_public_key()),
-                preburn_balances: preburn_balances
+                preburn_balances: /*preburn_balances
                     .iter()
                     .map(|(currency_code, balance)| {
                         AmountView::new(balance.coin(), &currency_code.as_str())
                     })
-                    .collect(),
+                    .collect(),*/
+                    match preburn_balances {
+                        DesignatedDealerPreburns::Preburn(preburn_balances) => {
+                            preburn_balances
+                                .iter()
+                                .map(|(currency_code, balance)| {
+                                    AmountView::new(balance.coin(), &currency_code.as_str())
+                                })
+                                .collect()
+                        }
+                        DesignatedDealerPreburns::PreburnQueue(preburn_queues) => {
+                            preburn_queues
+                                .iter()
+                                .map(|(currency_code, preburns)| {
+                                    let total_balance =
+                                        preburns.preburns().iter().fold(0, |acc: u64, preburn| {
+                                            acc.checked_add(preburn.preburn().coin()).unwrap()
+                                        });
+                                    AmountView::new(total_balance, &currency_code.as_str())
+                                })
+                                .collect()
+                        }
+                    },
                 received_mint_events_key: BytesView::from(
                     designated_dealer.received_mint_events().key().as_bytes(),
                 ),
@@ -709,7 +731,12 @@ impl From<TransactionPayload> for ScriptView {
             ),
             TransactionPayload::Module(_) => {
                 ("module publishing".to_string(), empty_vec, empty_ty_vec)
-            }
+            },
+            TransactionPayload::ScriptFunction(script_fn) => (
+                format!("{}::{}", script_fn.module(), script_fn.function()),
+                // TODO:
+                empty_vec, empty_ty_vec
+            ),
         };
 
         let res = match code.as_str() {

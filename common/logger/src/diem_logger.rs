@@ -1,5 +1,8 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
+
+//! Implementation of writing logs to both local printers (e.g. stdout) and remote loggers
+//! (e.g. Logstash)
 
 use crate::{
     counters::{
@@ -8,9 +11,12 @@ use crate::{
     },
     logger::Logger,
     struct_log::TcpWriter,
-    Event, Filter, Level, Metadata,
+    Event, Filter, Level, LevelFilter, Metadata,
 };
+use backtrace::Backtrace;
 use chrono::{SecondsFormat, Utc};
+use diem_infallible::RwLock;
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -18,21 +24,29 @@ use std::{
     io::Write,
     sync::{
         mpsc::{self, Receiver, SyncSender},
-        Arc, RwLock,
+        Arc,
     },
     thread,
 };
 
 const RUST_LOG: &str = "RUST_LOG";
+/// Default size of log write channel, if the channel is full, logs will be dropped
 pub const CHANNEL_SIZE: usize = 10000;
 const NUM_SEND_RETRIES: u8 = 1;
 
+/// A single log entry emitted by a logging macro with associated metadata
 #[derive(Debug, Serialize)]
 pub struct LogEntry {
     #[serde(flatten)]
     metadata: Metadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_name: Option<String>,
+    /// The program backtrace taken when the event occurred. Backtraces are
+    /// only supported for errors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backtrace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hostname: Option<&'static str>,
     timestamp: String,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     data: BTreeMap<&'static str, serde_json::Value>,
@@ -68,6 +82,27 @@ impl LogEntry {
         let thread_name = thread_name.map(ToOwned::to_owned);
         let message = event.message().map(fmt::format);
 
+        static HOSTNAME: Lazy<Option<String>> = Lazy::new(|| {
+            hostname::get()
+                .ok()
+                .and_then(|name| name.into_string().ok())
+        });
+
+        let hostname = HOSTNAME.as_deref();
+
+        let backtrace = match metadata.level() {
+            Level::Error => {
+                let mut backtrace = Backtrace::new();
+                let mut frames = backtrace.frames().to_vec();
+                if frames.len() > 3 {
+                    frames.drain(0..3); // Remove the first 3 unnecessary frames to simplify backtrace
+                }
+                backtrace = frames.into();
+                Some(format!("{:?}", backtrace))
+            }
+            _ => None,
+        };
+
         let mut data = BTreeMap::new();
         for schema in event.keys_and_values() {
             schema.visit(&mut JsonVisitor(&mut data));
@@ -76,30 +111,65 @@ impl LogEntry {
         Self {
             metadata,
             thread_name,
+            backtrace,
+            hostname,
             timestamp: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
             data,
             message,
         }
     }
+
+    pub fn metadata(&self) -> &Metadata {
+        &self.metadata
+    }
+
+    pub fn thread_name(&self) -> Option<&str> {
+        self.thread_name.as_deref()
+    }
+
+    pub fn backtrace(&self) -> Option<&str> {
+        self.backtrace.as_deref()
+    }
+
+    pub fn hostname(&self) -> Option<&str> {
+        self.hostname.as_deref()
+    }
+
+    pub fn timestamp(&self) -> &str {
+        self.timestamp.as_str()
+    }
+
+    pub fn data(&self) -> &BTreeMap<&'static str, serde_json::Value> {
+        &self.data
+    }
+
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
 }
 
-pub struct LibraLoggerBuilder {
+/// A builder for a `DiemLogger`, configures what, where, and how to write logs.
+pub struct DiemLoggerBuilder {
     channel_size: usize,
     level: Level,
+    remote_level: Level,
     address: Option<String>,
     printer: Option<Box<dyn Writer>>,
     is_async: bool,
+    custom_format: Option<fn(&LogEntry) -> Result<String, fmt::Error>>,
 }
 
-impl LibraLoggerBuilder {
+impl DiemLoggerBuilder {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self {
             channel_size: CHANNEL_SIZE,
             level: Level::Info,
+            remote_level: Level::Debug,
             address: None,
             printer: Some(Box::new(StderrWriter)),
             is_async: false,
+            custom_format: None,
         }
     }
 
@@ -120,6 +190,11 @@ impl LibraLoggerBuilder {
         self
     }
 
+    pub fn remote_level(&mut self, level: Level) -> &mut Self {
+        self.remote_level = level;
+        self
+    }
+
     pub fn channel_size(&mut self, channel_size: usize) -> &mut Self {
         self.channel_size = channel_size;
         self
@@ -135,43 +210,72 @@ impl LibraLoggerBuilder {
         self
     }
 
+    pub fn custom_format(
+        &mut self,
+        format: fn(&LogEntry) -> Result<String, fmt::Error>,
+    ) -> &mut Self {
+        self.custom_format = Some(format);
+        self
+    }
+
     pub fn init(&mut self) {
         self.build();
     }
 
-    pub fn build(&mut self) -> Arc<LibraLogger> {
+    pub fn build(&mut self) -> Arc<DiemLogger> {
         let filter = {
-            let mut filter_builder = Filter::builder();
+            let local_filter = {
+                let mut filter_builder = Filter::builder();
 
-            if env::var(RUST_LOG).is_ok() {
-                filter_builder.with_env(RUST_LOG);
-            } else {
-                filter_builder.filter_level(self.level.into());
+                if env::var(RUST_LOG).is_ok() {
+                    filter_builder.with_env(RUST_LOG);
+                } else {
+                    filter_builder.filter_level(self.level.into());
+                }
+
+                filter_builder.build()
+            };
+            let remote_filter = {
+                let mut filter_builder = Filter::builder();
+
+                if self.is_async && self.address.is_some() {
+                    filter_builder.filter_level(self.remote_level.into());
+                } else {
+                    filter_builder.filter_level(LevelFilter::Off);
+                }
+
+                filter_builder.build()
+            };
+
+            DiemFilter {
+                local_filter,
+                remote_filter,
             }
-
-            filter_builder.build()
         };
 
         let logger = if self.is_async {
             let (sender, receiver) = mpsc::sync_channel(self.channel_size);
+            let logger = Arc::new(DiemLogger {
+                sender: Some(sender),
+                printer: None,
+                filter: RwLock::new(filter),
+                formatter: self.custom_format.take().unwrap_or(default_format),
+            });
             let service = LoggerService {
                 receiver,
                 address: self.address.clone(),
                 printer: self.printer.take(),
+                facade: logger.clone(),
             };
-            let logger = Arc::new(LibraLogger {
-                sender: Some(sender),
-                printer: None,
-                filter: RwLock::new(filter),
-            });
 
             thread::spawn(move || service.run());
             logger
         } else {
-            Arc::new(LibraLogger {
+            Arc::new(DiemLogger {
                 sender: None,
                 printer: self.printer.take(),
                 filter: RwLock::new(filter),
+                formatter: self.custom_format.take().unwrap_or(default_format),
             })
         };
 
@@ -180,19 +284,34 @@ impl LibraLoggerBuilder {
     }
 }
 
-pub struct LibraLogger {
-    sender: Option<SyncSender<LogEntry>>,
-    printer: Option<Box<dyn Writer>>,
-    filter: RwLock<Filter>,
+/// A combination of `Filter`s to control where logs are written
+struct DiemFilter {
+    /// The local printer `Filter` to control what is logged in text output
+    local_filter: Filter,
+    /// The remote logging `Filter` to control what is sent to external logging
+    remote_filter: Filter,
 }
 
-impl LibraLogger {
-    pub fn builder() -> LibraLoggerBuilder {
-        LibraLoggerBuilder::new()
+impl DiemFilter {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        self.local_filter.enabled(metadata) || self.remote_filter.enabled(metadata)
+    }
+}
+
+pub struct DiemLogger {
+    sender: Option<SyncSender<LoggerServiceEvent>>,
+    printer: Option<Box<dyn Writer>>,
+    filter: RwLock<DiemFilter>,
+    pub(crate) formatter: fn(&LogEntry) -> Result<String, fmt::Error>,
+}
+
+impl DiemLogger {
+    pub fn builder() -> DiemLoggerBuilder {
+        DiemLoggerBuilder::new()
     }
 
     #[allow(clippy::new_ret_no_self)]
-    pub fn new() -> LibraLoggerBuilder {
+    pub fn new() -> DiemLoggerBuilder {
         Self::builder()
     }
 
@@ -208,17 +327,21 @@ impl LibraLogger {
     }
 
     pub fn set_filter(&self, filter: Filter) {
-        *self.filter.write().unwrap() = filter;
+        self.filter.write().local_filter = filter;
+    }
+
+    pub fn set_remote_filter(&self, filter: Filter) {
+        self.filter.write().remote_filter = filter;
     }
 
     fn send_entry(&self, entry: LogEntry) {
         if let Some(printer) = &self.printer {
-            let s = format(&entry).expect("Unable to format");
+            let s = (self.formatter)(&entry).expect("Unable to format");
             printer.write(s);
         }
 
         if let Some(sender) = &self.sender {
-            if let Err(e) = sender.try_send(entry) {
+            if let Err(e) = sender.try_send(LoggerServiceEvent::LogEntry(entry)) {
                 STRUCT_LOG_QUEUE_ERROR_COUNT.inc();
                 eprintln!("Failed to send structured log: {}", e);
             }
@@ -226,9 +349,9 @@ impl LibraLogger {
     }
 }
 
-impl Logger for LibraLogger {
+impl Logger for DiemLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        self.filter.read().unwrap().enabled(metadata)
+        self.filter.read().enabled(metadata)
     }
 
     fn record(&self, event: &Event) {
@@ -236,28 +359,71 @@ impl Logger for LibraLogger {
 
         self.send_entry(entry)
     }
+
+    fn flush(&self) {
+        if let Some(sender) = &self.sender {
+            let (oneshot_sender, oneshot_receiver) = mpsc::sync_channel(1);
+            sender
+                .send(LoggerServiceEvent::Flush(oneshot_sender))
+                .unwrap();
+            oneshot_receiver.recv().unwrap();
+        }
+    }
 }
 
+enum LoggerServiceEvent {
+    LogEntry(LogEntry),
+    Flush(SyncSender<()>),
+}
+
+/// A service for running a log listener, that will continually export logs through a local printer
+/// or to a `DiemLogger` for external logging.
 struct LoggerService {
-    receiver: Receiver<LogEntry>,
+    receiver: Receiver<LoggerServiceEvent>,
     address: Option<String>,
     printer: Option<Box<dyn Writer>>,
+    facade: Arc<DiemLogger>,
 }
 
 impl LoggerService {
     pub fn run(mut self) {
         let mut writer = self.address.take().map(TcpWriter::new);
 
-        for entry in self.receiver {
-            PROCESSED_STRUCT_LOG_COUNT.inc();
+        for event in self.receiver {
+            match event {
+                LoggerServiceEvent::LogEntry(entry) => {
+                    PROCESSED_STRUCT_LOG_COUNT.inc();
 
-            if let Some(printer) = &self.printer {
-                let s = format(&entry).expect("Unable to format");
-                printer.write(s)
-            }
+                    if let Some(printer) = &self.printer {
+                        if self
+                            .facade
+                            .filter
+                            .read()
+                            .local_filter
+                            .enabled(&entry.metadata)
+                        {
+                            let s = (self.facade.formatter)(&entry).expect("Unable to format");
+                            printer.write(s)
+                        }
+                    }
 
-            if let Some(writer) = &mut writer {
-                Self::write_to_logstash(writer, entry);
+                    if let Some(writer) = &mut writer {
+                        if self
+                            .facade
+                            .filter
+                            .read()
+                            .remote_filter
+                            .enabled(&entry.metadata)
+                        {
+                            Self::write_to_logstash(writer, entry);
+                        }
+                    }
+                }
+                LoggerServiceEvent::Flush(sender) => {
+                    // This is just to notify the other side, the logger doesn't actually care if
+                    // the listener is still listening
+                    let _ = sender.send(());
+                }
             }
         }
     }
@@ -301,7 +467,7 @@ impl LoggerService {
             );
         } else {
             SENT_STRUCT_LOG_COUNT.inc();
-            SENT_STRUCT_LOG_BYTES.inc_by(message_length as i64);
+            SENT_STRUCT_LOG_BYTES.inc_by(message_length as u64);
         }
     }
 }
@@ -324,18 +490,18 @@ impl Writer for StderrWriter {
 
 /// A struct for writing logs to a file
 pub struct FileWriter {
-    log_file: std::sync::RwLock<std::fs::File>,
+    log_file: RwLock<std::fs::File>,
 }
 
 impl FileWriter {
     pub fn new(log_file: std::path::PathBuf) -> Self {
         let file = std::fs::OpenOptions::new()
-            .write(true)
+            .append(true)
             .create(true)
             .open(log_file)
             .expect("Unable to open log file");
         Self {
-            log_file: std::sync::RwLock::new(file),
+            log_file: RwLock::new(file),
         }
     }
 }
@@ -343,7 +509,7 @@ impl FileWriter {
 impl Writer for FileWriter {
     /// Write to file
     fn write(&self, log: String) {
-        if let Err(err) = writeln!(self.log_file.write().unwrap(), "{}", log) {
+        if let Err(err) = writeln!(self.log_file.write(), "{}", log) {
             eprintln!("Unable to write to log file: {}", err.to_string());
         }
     }
@@ -352,8 +518,8 @@ impl Writer for FileWriter {
 /// Converts a record into a string representation:
 /// UNIX_TIMESTAMP LOG_LEVEL [thread_name] FILE:LINE MESSAGE JSON_DATA
 /// Example:
-/// 2020-03-07 05:03:03 INFO [thread_name] common/libra-logger/src/lib.rs:261 Hello { "world": true }
-fn format(entry: &LogEntry) -> Result<String, fmt::Error> {
+/// 2020-03-07 05:03:03 INFO [thread_name] common/diem-logger/src/lib.rs:261 Hello { "world": true }
+fn default_format(entry: &LogEntry) -> Result<String, fmt::Error> {
     use std::fmt::Write;
 
     let mut w = String::new();
@@ -434,6 +600,8 @@ mod tests {
             let entry = LogEntry::new(event, ::std::thread::current().name());
             self.0.send(entry).unwrap();
         }
+
+        fn flush(&self) {}
     }
 
     fn set_test_logger() -> Receiver<LogEntry> {
@@ -474,6 +642,7 @@ mod tests {
         assert_eq!(entry.metadata.module_path(), module_path!());
         assert_eq!(entry.metadata.file(), file!());
         assert_eq!(entry.message.as_deref(), Some("This is a log"));
+        assert!(entry.backtrace.is_none());
 
         // Log time should be the time the structured log entry was created
         let timestamp = DateTime::parse_from_rfc3339(&entry.timestamp).unwrap();
@@ -498,6 +667,11 @@ mod tests {
             entry.data.get("category").and_then(JsonValue::as_str),
             Some("name"),
         );
+
+        // Test error logs contain backtraces
+        error!("This is an error log");
+        let entry = receiver.recv().unwrap();
+        assert!(entry.backtrace.is_some());
 
         // Test all log levels work properly
         // Tracing should be skipped because the Logger was setup to skip Tracing events

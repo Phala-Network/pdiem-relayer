@@ -1,12 +1,14 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 //!
 //! The security module gathers security-related logs:
 //! logs to detect malicious behavior from other validators.
 //!
+//! TODO: This likely belongs outside of the logging crate
+//!
 //! ```
-//! use libra_logger::{error, SecurityEvent};
+//! use diem_logger::{error, SecurityEvent};
 //!
 //! error!(
 //!     SecurityEvent::InvalidRetrievedBlock,
@@ -32,7 +34,7 @@ pub enum SecurityEvent {
 
     // Consensus
     // ---------
-    /// Consensus received an invalid message (not well-formed or incorrect signature)
+    /// Consensus received an invalid message (not well-formed, invalid vote data or incorrect signature)
     ConsensusInvalidMessage,
 
     /// Consensus received an equivocating vote
@@ -40,9 +42,6 @@ pub enum SecurityEvent {
 
     /// Consensus received an invalid proposal
     InvalidConsensusProposal,
-
-    /// Consensus received an invalid vote
-    InvalidConsensusVote,
 
     /// Consensus received an invalid new round message
     InvalidConsensusRound,
@@ -71,11 +70,12 @@ pub enum SecurityEvent {
 
     // Network
     // -------
-    /// Network identified an invalid peer
-    InvalidNetworkPeer,
+    /// Network received an invalid message from a remote peer
+    InvalidNetworkEvent,
 
-    /// Network couldn't negotiate
-    InvalidNetworkHandshakeMsg,
+    /// A failed noise handshake that's either a clear bug or indicates some
+    /// security issue.
+    NoiseHandshake,
 }
 
 impl Schema for SecurityEvent {

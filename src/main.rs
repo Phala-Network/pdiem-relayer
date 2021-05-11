@@ -11,7 +11,7 @@ use diem_crypto::hash::CryptoHash;
 
 use diem_types::{
     account_address::{
-        AccountAddress,
+        AccountAddress, HashAccountAddress
     },
     chain_id::{ChainId, NamedChain},
     ledger_info::LedgerInfoWithSignatures,
@@ -21,7 +21,6 @@ use diem_types::{
         AccountStateProof,
         TransactionInfoWithProof,
         TransactionAccumulatorProof,
-        SparseMerkleProof,
     },
     trusted_state::{TrustedState, TrustedStateChange},
 };
@@ -35,6 +34,7 @@ use diem_json_rpc_client::{
 };
 use std::{convert::TryFrom};
 use diem_types::account_state_blob::AccountStateBlob;
+type SparseMerkleProof = diem_types::proof::SparseMerkleProof<AccountStateBlob>;
 
 mod pruntime_client;
 mod types;

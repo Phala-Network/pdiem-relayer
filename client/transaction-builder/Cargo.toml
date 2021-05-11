@@ -16,9 +16,9 @@ include_dir = "0.6.0"
 
 # compiled-stdlib = { path = "../../language/stdlib/compiled",  version = "0.1.0" }
 bcs = "0.1.2"
-move-core-types = { path = "../../language/move-core/types", version = "0.1.0" }
-diem-types = { path = "../../types", version = "0.1.0" }
-diem-crypto = { path = "../../crypto/crypto", version = "0.1.0" }
+move-core-types = { path = "../../language/move-core/types", version = "0.0.1" }
+diem-types = { path = "../../types", version = "0.0.1" }
+diem-crypto = { path = "../../crypto/crypto", version = "0.0.1" }
 
 proptest = { version = "0.10.1", optional = true }
 proptest-derive = { version = "0.2.0", optional = true }

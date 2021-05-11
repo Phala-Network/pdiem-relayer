@@ -10,7 +10,7 @@
 use anyhow::{anyhow, Error, Result};
 use include_dir::{include_dir, Dir};
 use diem_crypto::HashValue;
-use diem_types::transaction::{ScriptABI, SCRIPT_HASH_LENGTH};
+use diem_types::transaction::{TransactionScriptABI, SCRIPT_HASH_LENGTH};
 use std::{convert::TryFrom, fmt, path::PathBuf};
 
 // This includes the script ABIs as binaries. We must use this hack to work around
@@ -131,7 +131,7 @@ impl StdlibScript {
     }
 
     /// Return the ABI of the script (including the bytecode).
-    pub fn abi(self) -> ScriptABI {
+    pub fn abi(self) -> TransactionScriptABI {
         let mut path = PathBuf::from(self.name());
         path.set_extension("abi");
         let content = TXN_SCRIPTS_ABI_DIR

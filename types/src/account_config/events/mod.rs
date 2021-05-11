@@ -15,7 +15,6 @@ pub mod preburn;
 pub mod received_mint;
 pub mod received_payment;
 pub mod sent_payment;
-pub mod upgrade;
 
 pub use admin_transaction::*;
 pub use base_url_rotation::*;
@@ -31,4 +30,3 @@ pub use preburn::*;
 pub use received_mint::*;
 pub use received_payment::*;
 pub use sent_payment::*;
-pub use upgrade::*;
