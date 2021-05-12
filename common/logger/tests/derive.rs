@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use diem_log_derive::Schema;
@@ -79,7 +79,7 @@ fn error_trait_object() {
         }
     }
 
-    impl ::std::error::Error for OurError {};
+    impl ::std::error::Error for OurError {}
 
     let debug_error = ::std::io::Error::new(::std::io::ErrorKind::Other, "This is an error");
     let display_error = OurError;

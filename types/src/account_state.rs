@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{
+    access_path::Path,
     account_address::AccountAddress,
     account_config::{
         type_tag_for_currency_code, AccountResource, AccountRole, BalanceResource, ChainIdResource,
-        ChildVASP, Credential, CurrencyInfoResource, DesignatedDealer, FreezingBit, ParentVASP,
-        PreburnResource,
+        ChildVASP, Credential, CurrencyInfoResource, DesignatedDealer, DesignatedDealerPreburns,
+        FreezingBit, ParentVASP, PreburnQueueResource, PreburnResource,
     },
     block_metadata::DiemBlockResource,
     diem_timestamp::DiemTimestampResource,
@@ -69,6 +70,23 @@ impl AccountState {
             .collect()
     }
 
+    pub fn get_preburn_queue_balances(
+        &self,
+        currency_codes: &[Identifier],
+    ) -> Result<BTreeMap<Identifier, PreburnQueueResource>> {
+        currency_codes
+            .iter()
+            .filter_map(|currency_code| {
+                let currency_type_tag = type_tag_for_currency_code(currency_code.to_owned());
+                // TODO: update this to use PreburnQueueResource::resource_path once that takes type
+                // parameters
+                self.get_resource_impl(&PreburnQueueResource::access_path_for(currency_type_tag))
+                    .transpose()
+                    .map(|preburn_balance| preburn_balance.map(|b| (currency_code.to_owned(), b)))
+            })
+            .collect()
+    }
+
     pub fn get_chain_id_resource(&self) -> Result<Option<ChainIdResource>> {
         self.get_resource::<ChainIdResource>()
     }
@@ -113,9 +131,23 @@ impl AccountState {
             match (
                 self.get_resource::<Credential>(),
                 self.get_preburn_balances(&currency_codes),
+                self.get_preburn_queue_balances(&currency_codes),
                 self.get_resource::<DesignatedDealer>(),
             ) {
-                (Ok(Some(dd_credential)), Ok(preburn_balances), Ok(Some(designated_dealer))) => {
+                (
+                    Ok(Some(dd_credential)),
+                    Ok(preburn_balances),
+                    Ok(preburn_queues),
+                    Ok(Some(designated_dealer)),
+                ) => {
+                    let preburn_balances =
+                        if preburn_balances.is_empty() && !preburn_queues.is_empty() {
+                            DesignatedDealerPreburns::PreburnQueue(preburn_queues)
+                        } else if !preburn_balances.is_empty() && preburn_queues.is_empty() {
+                            DesignatedDealerPreburns::Preburn(preburn_balances)
+                        } else {
+                            return Ok(None);
+                        };
                     Ok(Some(AccountRole::DesignatedDealer {
                         dd_credential,
                         preburn_balances,
@@ -199,6 +231,16 @@ impl AccountState {
 
     pub fn get_resource<T: MoveResource + DeserializeOwned>(&self) -> Result<Option<T>> {
         self.get_resource_impl(&T::struct_tag().access_vector())
+    }
+
+    /// Return an iterator over the module values stored under this account
+    pub fn get_modules(&self) -> impl Iterator<Item = &Vec<u8>> {
+        self.0.iter().filter_map(
+            |(k, v)| match Path::try_from(k).expect("Invalid access path") {
+                Path::Code(_) => Some(v),
+                Path::Resource(_) => None,
+            },
+        )
     }
 }
 

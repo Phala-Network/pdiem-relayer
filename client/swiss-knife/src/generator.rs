@@ -15,7 +15,7 @@ use diem_types::{
         TransactionPayload,
     },
 };
-use rand::{prelude::StdRng, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use structopt::StructOpt;
